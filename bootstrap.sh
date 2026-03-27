@@ -109,9 +109,9 @@ trap cleanup EXIT
 
 BASE_URL="https://${RAW_HOST}/${REPO}/${REF}"
 log "Downloading scripts from ${BASE_URL}"
-download_file "${BASE_URL}/install-home.sh" "${WORK_DIR}/install-home.sh"
-download_file "${BASE_URL}/gen-home.sh" "${WORK_DIR}/gen-home.sh"
-chmod +x "${WORK_DIR}/install-home.sh" "${WORK_DIR}/gen-home.sh"
+download_file "${BASE_URL}/install-sing-box-home.sh" "${WORK_DIR}/install-sing-box-home.sh"
+download_file "${BASE_URL}/generate-sing-box-config.sh" "${WORK_DIR}/generate-sing-box-config.sh"
+chmod +x "${WORK_DIR}/install-sing-box-home.sh" "${WORK_DIR}/generate-sing-box-config.sh"
 
 cd "$WORK_DIR"
 run_installer() {
@@ -127,9 +127,9 @@ run_installer() {
 }
 
 if [[ "$(id -u)" -eq 0 ]]; then
-  run_installer ./install-home.sh "${FORWARD_ARGS[@]}"
+  run_installer ./install-sing-box-home.sh "${FORWARD_ARGS[@]}"
 elif command -v sudo >/dev/null 2>&1; then
-  run_installer sudo ./install-home.sh "${FORWARD_ARGS[@]}"
+  run_installer sudo ./install-sing-box-home.sh "${FORWARD_ARGS[@]}"
 else
   die 'Please run as root or install sudo'
 fi

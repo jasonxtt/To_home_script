@@ -6,7 +6,7 @@ usage() {
 Generate a minimal sing-box home-access bundle.
 
 Usage:
-  gen-home.sh --host <domain-or-ip> [options]
+  generate-sing-box-config.sh --host <domain-or-ip> [options]
 
 Required:
   --host <host>                               Server host / DDNS / IP

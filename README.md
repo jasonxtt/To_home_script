@@ -4,9 +4,9 @@
 
 ## 包含内容
 
-- `install-home.sh`：一键安装/增量更新/卸载脚本（交互优先）
-- `gen-home.sh`：配置与产物生成脚本
-- `README-home-ss.md`：详细说明（协议、交互流程、增量更新行为等）
+- `install-sing-box-home.sh`：一键安装/增量更新/卸载脚本（交互优先）
+- `generate-sing-box-config.sh`：配置与产物生成脚本
+- `PROJECT_CONTEXT.md`：项目上下文说明（面向 AI 快速理解）
 
 ## curl 一键运行（无需 git clone）
 
@@ -18,7 +18,7 @@ curl -fsSL https://raw.githubusercontent.com/jasonxtt/To_home_script/main/bootst
 
 说明：上述管道方式会自动回连 `/dev/tty`，可正常进入交互安装。
 
-给 `install-home.sh` 透传参数时，直接写在后面即可：
+给 `install-sing-box-home.sh` 透传参数时，直接写在后面即可：
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/jasonxtt/To_home_script/main/bootstrap.sh | \
@@ -46,31 +46,54 @@ curl -fsSL https://raw.githubusercontent.com/jasonxtt/To_home_script/main/bootst
 ```bash
 git clone https://github.com/jasonxtt/To_home_script.git
 cd To_home_script
-chmod +x install-home.sh gen-home.sh
+chmod +x install-sing-box-home.sh generate-sing-box-config.sh
 ```
 
 方式 2：仅下载脚本
 
 ```bash
-curl -fsSLO https://raw.githubusercontent.com/jasonxtt/To_home_script/main/install-home.sh
-curl -fsSLO https://raw.githubusercontent.com/jasonxtt/To_home_script/main/gen-home.sh
-chmod +x install-home.sh gen-home.sh
+curl -fsSLO https://raw.githubusercontent.com/jasonxtt/To_home_script/main/install-sing-box-home.sh
+curl -fsSLO https://raw.githubusercontent.com/jasonxtt/To_home_script/main/generate-sing-box-config.sh
+chmod +x install-sing-box-home.sh generate-sing-box-config.sh
 ```
 
 准备好两个脚本后，再执行：
 
 ```bash
-sudo ./install-home.sh
+sudo ./install-sing-box-home.sh
+```
+
+脚本启动后会先让你选择模式：
+
+- 独立部署回家 sing-box
+- 合并到已有 sing-box 配置（仅追加 `inbounds`）
+
+非交互强制合并模式：
+
+```bash
+sudo ./install-sing-box-home.sh --merge-into-existing
+```
+
+如果自动探测已有配置失败或有歧义，可指定配置路径（`config.json` 或 `conf` 目录）：
+
+```bash
+sudo ./install-sing-box-home.sh --merge-into-existing --merge-config-dir /path/to/sing-box/config.json
+```
+
+如果机器上有多个 sing-box service，且无法自动判断该重启哪一个，也可以显式指定：
+
+```bash
+sudo ./install-sing-box-home.sh --merge-into-existing --merge-config-dir /path/to/sing-box/conf --merge-service-name sing-box
 ```
 
 非交互卸载：
 
 ```bash
-sudo ./install-home.sh --uninstall
+sudo ./install-sing-box-home.sh --uninstall
 ```
 
 ## 文档
 
 详细用法与最新交互流程请查看：
 
-- [README-home-ss.md](./README-home-ss.md)
+- [PROJECT_CONTEXT.md](./PROJECT_CONTEXT.md)

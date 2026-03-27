@@ -6,10 +6,10 @@ usage() {
 Install and deploy a sing-box home-access server bundle.
 
 Interactive-first usage:
-  sudo ./install-home.sh
+  sudo ./install-sing-box-home.sh
 
 Command-line usage:
-  sudo ./install-home.sh --host <domain-or-ip> [options]
+  sudo ./install-sing-box-home.sh --host <domain-or-ip> [options]
 
 Interactive prompts:
   - DDNS domain / public IP: required if --host not provided
@@ -28,8 +28,8 @@ Core options:
   --password <password>                       Explicit SS password
   --version <version>                         sing-box version without leading v (default: latest stable)
   --listen <addr>                             Server listen address (default: ::)
-  --home-cidrs <csv>                          Metadata passed through to gen-home.sh
-  --tg-rule-set <name>                        Metadata passed through to gen-home.sh (default: geoip-tg)
+  --home-cidrs <csv>                          Metadata passed through to generate-sing-box-config.sh
+  --tg-rule-set <name>                        Metadata passed through to generate-sing-box-config.sh (default: geoip-tg)
   --enable-fakeip | --disable-fakeip          Manifest metadata flag (default: disabled)
   --enable-tgip   | --disable-tgip            Manifest metadata flag (default: disabled)
 
@@ -76,6 +76,10 @@ Paths / install:
   --bin-dir <dir>                             Install binary directory (default: /usr/local/bin)
   --config-dir <dir>                          Install config directory (default: /usr/local/etc/sing-box)
   --service-name <name>                       systemd unit name without suffix (default: sing-box)
+  --merge-into-existing                       Merge generated server inbounds into an existing sing-box config
+  --standalone                                Force standalone deployment mode (default behavior)
+  --merge-config-dir <path>                   Manually specify existing sing-box config path for merge mode
+  --merge-service-name <name>                 Manually specify existing sing-box service name for merge mode
   --artifact-dir <dir>                        Keep generated artifacts in this directory
   --backup-dir <dir>                          Keep backups/rollback files in this directory
   --work-dir <dir>                            Temp work directory base (default: /tmp)
@@ -102,10 +106,29 @@ VBR_EFFECTIVE_STATUS="disabled"
 ACME_SKIPPED_PROTOCOLS=()
 ACME_SKIP_REASON=""
 INSTALLER_STATE_VERSION="2026-03-20"
+DEPLOY_MODE="standalone"
+DEPLOY_MODE_SOURCE="default"
+MERGE_CONFIG_DIR_HINT=""
+MERGE_SERVICE_NAME=""
+MERGE_SERVICE_UNIT=""
+MERGE_SINGBOX_BIN=""
+MERGE_CONFIG_MODE=""
+MERGE_CONFIG_VALUE=""
+MERGE_TARGET_CONFIG=""
+MERGE_TARGET_DIR=""
+MERGE_TARGET_BACKUP=""
+MERGE_SERVICE_NAME_HINT=""
+MERGE_DETECTED_PROTOCOLS=()
+MERGE_MATCHED_SERVICES=()
+MERGE_CANDIDATES=()
 
 cleanup() {
-  [[ -n "${ACME_ENV_TEMP:-}" && -f "${ACME_ENV_TEMP:-}" ]] && rm -f "$ACME_ENV_TEMP"
-  [[ -n "${WORK_ROOT:-}" && -d "${WORK_ROOT:-}" ]] && rm -rf "$WORK_ROOT"
+  if [[ -n "${ACME_ENV_TEMP:-}" && -f "${ACME_ENV_TEMP:-}" ]]; then
+    rm -f "$ACME_ENV_TEMP"
+  fi
+  if [[ -n "${WORK_ROOT:-}" && -d "${WORK_ROOT:-}" ]]; then
+    rm -rf "$WORK_ROOT"
+  fi
 }
 
 restore_target() {
@@ -1080,6 +1103,11 @@ apply_incremental_protocol_plan() { local proto; KEEP_PROTOCOLS=(); ADD_PROTOCOL
 format_protocol_list() { local proto items=(); for proto in "$@"; do items+=("$(protocol_label "$proto")"); done; if (( ${#items[@]} == 0 )); then printf '无'; else join_by ', ' "${items[@]}"; fi; }
 show_environment_status() {
   printf '当前环境检查：\n'
+  if [[ "$DEPLOY_MODE" == "merge" ]]; then
+    printf '  - 运行模式：合并到已有 sing-box 配置\n'
+  else
+    printf '  - 运行模式：独立部署回家 sing-box\n'
+  fi
   printf '  - sing-box 已安装：%s\n' "$([[ "$BINARY_EXISTS" == true ]] && echo 是 || echo 否)"
   printf '  - service 已存在：%s\n' "$([[ "$SERVICE_EXISTS" == true ]] && echo 是 || echo 否)"
   printf '  - service 运行中：%s\n' "$([[ "$SERVICE_ACTIVE" == true ]] && echo 是 || echo 否)"
@@ -1109,6 +1137,569 @@ EOF
       *) echo '[ERR] 请输入 1-4。' >&2 ;;
     esac
   done
+}
+
+collect_deploy_mode_if_needed() {
+  [[ "$DEPLOY_MODE_SOURCE" == "flag" ]] && return 0
+  interactive_mode || return 0
+  local choice
+  while true; do
+    cat <<'EOF'
+
+========== 部署模式 ==========
+1) 独立部署回家 sing-box
+2) 合并到已有 sing-box 配置（仅追加 inbounds）
+EOF
+    read -r -p '请输入编号 [1-2]（默认 1）: ' choice
+    choice="${choice:-1}"
+    case "$choice" in
+      1) DEPLOY_MODE="standalone"; return 0 ;;
+      2) DEPLOY_MODE="merge"; return 0 ;;
+      *) echo '[ERR] 请输入 1 或 2。' >&2 ;;
+    esac
+  done
+}
+
+extract_service_execstart_line() {
+  local unit="$1"
+  systemctl cat "$unit" 2>/dev/null | awk '
+    BEGIN { in_service=0 }
+    /^\[Service\]/ { in_service=1; next }
+    /^\[/ { in_service=0 }
+    in_service && /^ExecStart=/ { sub(/^ExecStart=/, "", $0); print; exit }
+  '
+}
+
+parse_singbox_execstart() {
+  local execstart_line="$1"
+  python3 - "$execstart_line" <<'PY'
+import os
+import shlex
+import sys
+
+line = sys.argv[1].strip()
+if not line:
+    raise SystemExit(1)
+if line.startswith("-"):
+    line = line[1:].lstrip()
+try:
+    tokens = shlex.split(line)
+except Exception:
+    raise SystemExit(1)
+
+bin_index = -1
+for i, tok in enumerate(tokens):
+    base = os.path.basename(tok)
+    if base in ("sing-box", "singbox"):
+        bin_index = i
+        break
+if bin_index < 0:
+    raise SystemExit(1)
+
+run_index = -1
+for i in range(bin_index + 1, len(tokens)):
+    if tokens[i] == "run":
+        run_index = i
+        break
+if run_index < 0:
+    raise SystemExit(1)
+
+mode = ""
+path = ""
+workdir = ""
+for i in range(run_index + 1, len(tokens)):
+    tok = tokens[i]
+    if tok in ("-c", "--config"):
+        if i + 1 < len(tokens):
+            mode = "c"
+            path = tokens[i + 1]
+            break
+    elif tok.startswith("-c="):
+        mode = "c"
+        path = tok.split("=", 1)[1]
+        break
+    elif tok.startswith("--config="):
+        mode = "c"
+        path = tok.split("=", 1)[1]
+        break
+    elif tok in ("-C", "--config-directory"):
+        if i + 1 < len(tokens):
+            mode = "C"
+            path = tokens[i + 1]
+            break
+    elif tok.startswith("-C="):
+        mode = "C"
+        path = tok.split("=", 1)[1]
+        break
+    elif tok.startswith("--config-directory="):
+        mode = "C"
+        path = tok.split("=", 1)[1]
+        break
+    elif tok in ("-D", "--directory"):
+        if i + 1 < len(tokens):
+            workdir = tokens[i + 1]
+    elif tok.startswith("-D="):
+        workdir = tok.split("=", 1)[1]
+    elif tok.startswith("--directory="):
+        workdir = tok.split("=", 1)[1]
+
+if (not mode or not path) and workdir:
+    workdir = os.path.realpath(workdir)
+    config_path = os.path.join(workdir, "config.json")
+    config_dir = os.path.join(workdir, "conf")
+    if os.path.isfile(config_path):
+        mode = "c"
+        path = config_path
+    elif os.path.isdir(config_dir):
+        mode = "C"
+        path = config_dir
+
+if not mode or not path:
+    raise SystemExit(1)
+
+print(tokens[bin_index])
+print(mode)
+print(path)
+PY
+}
+
+discover_merge_candidates() {
+  local unit execstart_line
+  MERGE_CANDIDATES=()
+  while IFS= read -r unit; do
+    [[ "$unit" == *.service ]] || continue
+    execstart_line="$(extract_service_execstart_line "$unit")"
+    [[ -n "$execstart_line" ]] || continue
+    mapfile -t _meta < <(parse_singbox_execstart "$execstart_line" 2>/dev/null || true)
+    (( ${#_meta[@]} == 3 )) || continue
+    MERGE_CANDIDATES+=("${unit}|${_meta[0]}|${_meta[1]}|${_meta[2]}")
+  done < <(systemctl list-unit-files --type=service --no-legend 2>/dev/null | awk '{print $1}' | sort -u)
+}
+
+json_has_top_level_inbounds_array() {
+  local json_file="$1"
+  python3 - "$json_file" <<'PY'
+import json
+import sys
+path = sys.argv[1]
+try:
+    data = json.load(open(path, encoding="utf-8"))
+except Exception:
+    raise SystemExit(1)
+if isinstance(data, dict) and isinstance(data.get("inbounds"), list):
+    raise SystemExit(0)
+raise SystemExit(1)
+PY
+}
+
+find_first_inbounds_json_in_dir() {
+  local dir="$1"
+  python3 - "$dir" <<'PY'
+import json
+import os
+import sys
+root = sys.argv[1]
+paths = []
+for base, _dirs, files in os.walk(root):
+    for name in files:
+        if name.endswith(".json"):
+            paths.append(os.path.join(base, name))
+for path in sorted(paths):
+    try:
+        data = json.load(open(path, encoding="utf-8"))
+    except Exception:
+        continue
+    if isinstance(data, dict) and isinstance(data.get("inbounds"), list):
+        print(path)
+        break
+PY
+}
+
+normalize_fs_path() {
+  python3 - "$1" <<'PY'
+import os
+import sys
+print(os.path.realpath(sys.argv[1]))
+PY
+}
+
+resolve_merge_bin_path() {
+  if [[ -n "$MERGE_SINGBOX_BIN" && -x "$MERGE_SINGBOX_BIN" ]]; then
+    return 0
+  fi
+  if command -v sing-box >/dev/null 2>&1; then
+    MERGE_SINGBOX_BIN="$(command -v sing-box)"
+    return 0
+  fi
+  if command -v singbox >/dev/null 2>&1; then
+    MERGE_SINGBOX_BIN="$(command -v singbox)"
+    return 0
+  fi
+  die 'Unable to locate sing-box binary for merge mode'
+}
+
+set_merge_service_from_candidate() {
+  local candidate="$1" unit bin _mode _value
+  IFS='|' read -r unit bin _mode _value <<< "$candidate"
+  MERGE_SERVICE_UNIT="$unit"
+  MERGE_SERVICE_NAME="${unit%.service}"
+  MERGE_SINGBOX_BIN="$bin"
+}
+
+set_merge_target_from_candidate() {
+  local candidate="$1" unit bin mode value
+  IFS='|' read -r unit bin mode value <<< "$candidate"
+  MERGE_SERVICE_UNIT="$unit"
+  MERGE_SERVICE_NAME="${unit%.service}"
+  MERGE_SINGBOX_BIN="$bin"
+  MERGE_CONFIG_MODE="$mode"
+  MERGE_CONFIG_VALUE="$value"
+}
+
+resolve_merge_target_from_file() {
+  local file="$1" candidate unit bin mode value file_norm value_norm
+  [[ -f "$file" ]] || die "Merge config file not found: $file"
+  json_has_top_level_inbounds_array "$file" || die "Config file has no top-level inbounds array: $file"
+  file_norm="$(normalize_fs_path "$file")"
+  MERGE_TARGET_CONFIG="$file_norm"
+  MERGE_TARGET_DIR="$(dirname "$file_norm")"
+  MERGE_CONFIG_MODE="c"
+  MERGE_CONFIG_VALUE="$file_norm"
+  MERGE_MATCHED_SERVICES=()
+  for candidate in "${MERGE_CANDIDATES[@]}"; do
+    IFS='|' read -r unit bin mode value <<< "$candidate"
+    value_norm="$(normalize_fs_path "$value" 2>/dev/null || printf '%s' "$value")"
+    if [[ "$mode" == "c" && "$value_norm" == "$file_norm" ]]; then
+      MERGE_MATCHED_SERVICES+=("$candidate")
+    fi
+  done
+}
+
+resolve_merge_target_from_dir() {
+  local dir="$1" candidate unit bin mode value target_file dir_norm value_norm
+  [[ -d "$dir" ]] || die "Merge config directory not found: $dir"
+  dir_norm="$(normalize_fs_path "$dir")"
+  target_file="$(find_first_inbounds_json_in_dir "$dir_norm")"
+  [[ -n "$target_file" ]] || die "No JSON with top-level inbounds array found under: $dir"
+  MERGE_TARGET_DIR="$dir_norm"
+  MERGE_TARGET_CONFIG="$target_file"
+  MERGE_CONFIG_MODE="C"
+  MERGE_CONFIG_VALUE="$dir_norm"
+  MERGE_MATCHED_SERVICES=()
+  for candidate in "${MERGE_CANDIDATES[@]}"; do
+    IFS='|' read -r unit bin mode value <<< "$candidate"
+    value_norm="$(normalize_fs_path "$value" 2>/dev/null || printf '%s' "$value")"
+    if [[ "$mode" == "C" && "$value_norm" == "$dir_norm" ]]; then
+      MERGE_MATCHED_SERVICES+=("$candidate")
+      continue
+    fi
+    if [[ "$mode" == "c" && "$(normalize_fs_path "$(dirname "$value")" 2>/dev/null || dirname "$value")" == "$dir_norm" ]]; then
+      MERGE_MATCHED_SERVICES+=("$candidate")
+    fi
+  done
+  if (( ${#MERGE_MATCHED_SERVICES[@]} == 1 )); then
+    IFS='|' read -r unit bin mode value <<< "${MERGE_MATCHED_SERVICES[0]}"
+    if [[ "$mode" == "c" && -f "$value" ]]; then
+      target_file="$(normalize_fs_path "$value")"
+      MERGE_TARGET_CONFIG="$target_file"
+      MERGE_TARGET_DIR="$(dirname "$target_file")"
+      MERGE_CONFIG_MODE="c"
+      MERGE_CONFIG_VALUE="$target_file"
+    fi
+  fi
+}
+
+resolve_merge_service_from_hint() {
+  local unit candidate
+  [[ -n "$MERGE_SERVICE_NAME_HINT" ]] || return 1
+  unit="$MERGE_SERVICE_NAME_HINT"
+  [[ "$unit" == *.service ]] || unit="${unit}.service"
+  for candidate in "${MERGE_CANDIDATES[@]}"; do
+    if [[ "${candidate%%|*}" == "$unit" ]]; then
+      set_merge_service_from_candidate "$candidate"
+      return 0
+    fi
+  done
+  if systemctl list-unit-files --type=service --no-legend 2>/dev/null | awk '{print $1}' | grep -Fxq "$unit"; then
+    MERGE_SERVICE_UNIT="$unit"
+    MERGE_SERVICE_NAME="${unit%.service}"
+    return 0
+  fi
+  die "Specified merge service not found: $unit"
+}
+
+prompt_merge_service_name_if_needed() {
+  local input
+  if resolve_merge_service_from_hint; then
+    return 0
+  fi
+  if (( ${#MERGE_MATCHED_SERVICES[@]} == 1 )); then
+    set_merge_service_from_candidate "${MERGE_MATCHED_SERVICES[0]}"
+    return 0
+  fi
+  if (( ${#MERGE_MATCHED_SERVICES[@]} > 1 )); then
+    warn 'Multiple sing-box services match this config path; please specify which service to restart'
+  elif (( ${#MERGE_CANDIDATES[@]} == 1 )); then
+    set_merge_service_from_candidate "${MERGE_CANDIDATES[0]}"
+    return 0
+  elif (( ${#MERGE_CANDIDATES[@]} == 0 )); then
+    warn 'No sing-box service was auto-detected; service name is required for restart in merge mode'
+  else
+    warn 'Could not uniquely map this config path to a sing-box service; service name is required'
+  fi
+  interactive_mode || die 'Merge mode requires --merge-service-name when service auto-detection is ambiguous'
+  while true; do
+    read -r -p '请输入要重启的 sing-box service 名称（例如 sing-box 或 singbox）: ' input
+    [[ -n "$input" ]] || { echo '[ERR] service 名称不能为空。' >&2; continue; }
+    MERGE_SERVICE_NAME_HINT="$input"
+    if resolve_merge_service_from_hint; then
+      return 0
+    fi
+  done
+}
+
+resolve_merge_target_from_path() {
+  local path="$1"
+  if [[ -d "$path" ]]; then
+    resolve_merge_target_from_dir "$path"
+  elif [[ -f "$path" ]]; then
+    resolve_merge_target_from_file "$path"
+  else
+    die "Merge config path not found: $path"
+  fi
+  prompt_merge_service_name_if_needed
+}
+
+prompt_merge_config_path_if_needed() {
+  local path_input
+  if [[ -n "$MERGE_CONFIG_DIR_HINT" ]]; then
+    resolve_merge_target_from_path "$MERGE_CONFIG_DIR_HINT"
+    return 0
+  fi
+  interactive_mode || die 'Merge mode could not auto-detect target config path in non-interactive mode; provide --merge-config-dir'
+  while true; do
+    read -r -p '请输入现有 sing-box 配置路径（config.json 或 conf 目录）: ' path_input
+    [[ -n "$path_input" ]] || { echo '[ERR] 配置路径不能为空。' >&2; continue; }
+    if [[ ! -e "$path_input" ]]; then
+      echo "[ERR] 路径不存在：$path_input" >&2
+      continue
+    fi
+    if resolve_merge_target_from_path "$path_input"; then
+      return 0
+    fi
+  done
+}
+
+setup_merge_mode_target() {
+  local candidate
+  discover_merge_candidates
+  if (( ${#MERGE_CANDIDATES[@]} == 1 )); then
+    candidate="${MERGE_CANDIDATES[0]}"
+    set_merge_target_from_candidate "$candidate"
+    if [[ "$MERGE_CONFIG_MODE" == "c" ]]; then
+      if [[ -f "$MERGE_CONFIG_VALUE" ]] && json_has_top_level_inbounds_array "$MERGE_CONFIG_VALUE"; then
+        MERGE_TARGET_CONFIG="$(normalize_fs_path "$MERGE_CONFIG_VALUE")"
+        MERGE_TARGET_DIR="$(dirname "$MERGE_TARGET_CONFIG")"
+        MERGE_CONFIG_VALUE="$MERGE_TARGET_CONFIG"
+        prompt_merge_service_name_if_needed
+      else
+        warn "Auto-detected -c config is not suitable: $MERGE_CONFIG_VALUE"
+        prompt_merge_config_path_if_needed
+      fi
+    else
+      if [[ -d "$MERGE_CONFIG_VALUE" ]]; then
+        MERGE_TARGET_DIR="$(normalize_fs_path "$MERGE_CONFIG_VALUE")"
+        MERGE_CONFIG_VALUE="$MERGE_TARGET_DIR"
+        MERGE_TARGET_CONFIG="$(find_first_inbounds_json_in_dir "$MERGE_TARGET_DIR")"
+      fi
+      prompt_merge_service_name_if_needed
+      [[ -n "$MERGE_TARGET_CONFIG" ]] || {
+        warn "Auto-detected -C directory has no top-level inbounds JSON: $MERGE_CONFIG_VALUE"
+        prompt_merge_config_path_if_needed
+      }
+    fi
+  else
+    if (( ${#MERGE_CANDIDATES[@]} > 1 )); then
+      warn 'Multiple sing-box services were detected; manual config path input is required'
+    else
+      warn 'No sing-box service with detectable run -c/-C was found; manual config path input is required'
+    fi
+    prompt_merge_config_path_if_needed
+  fi
+
+  [[ -n "$MERGE_TARGET_CONFIG" && -f "$MERGE_TARGET_CONFIG" ]] || die 'Merge target config file is not available'
+  [[ -n "$MERGE_TARGET_DIR" && -d "$MERGE_TARGET_DIR" ]] || die 'Merge target config directory is not available'
+  resolve_merge_bin_path
+  SERVICE_NAME="$MERGE_SERVICE_NAME"
+  TARGET_CONFIG="$MERGE_TARGET_CONFIG"
+  TARGET_BIN="$MERGE_SINGBOX_BIN"
+}
+
+load_existing_inbound_ports_for_merge() {
+  local parsed port owner
+  unset MERGE_EXISTING_PORT_MAP
+  declare -gA MERGE_EXISTING_PORT_MAP=()
+  parsed="$(python3 - "$MERGE_CONFIG_MODE" "$MERGE_TARGET_CONFIG" "$MERGE_TARGET_DIR" <<'PY'
+import json
+import os
+import sys
+mode = sys.argv[1]
+target_config = sys.argv[2]
+target_dir = sys.argv[3]
+
+paths = []
+if mode == 'C':
+    for base, _dirs, files in os.walk(target_dir):
+        for name in files:
+            if name.endswith('.json'):
+                paths.append(os.path.join(base, name))
+    paths.sort()
+else:
+    paths = [target_config]
+
+for path in paths:
+    try:
+        data = json.load(open(path, encoding='utf-8'))
+    except Exception:
+        continue
+    if not isinstance(data, dict):
+        continue
+    for ib in data.get('inbounds', []):
+        if not isinstance(ib, dict):
+            continue
+        lp = ib.get('listen_port')
+        if isinstance(lp, int):
+            owner = ib.get('tag') or ib.get('type') or 'existing'
+            if mode == 'C':
+                rel = os.path.relpath(path, target_dir)
+                owner = f'{rel}:{owner}'
+            print(f"{lp}\t{owner}")
+PY
+)"
+  while IFS=$'\t' read -r port owner; do
+    [[ -n "$port" ]] || continue
+    MERGE_EXISTING_PORT_MAP["$port"]="$owner"
+  done <<< "$parsed"
+}
+
+validate_ports_against_merge_target() {
+  local conflicts=() proto port var owner other other_port label raw
+  load_existing_inbound_ports_for_merge
+  while true; do
+    conflicts=()
+    for proto in "${PROTOCOL_KEYS[@]}"; do
+      [[ "$(get_protocol_state "$proto")" == true ]] || continue
+      port="$(get_protocol_port "$proto")"
+      if [[ -n "${MERGE_EXISTING_PORT_MAP[$port]:-}" ]]; then
+        conflicts+=("$proto")
+      fi
+    done
+    (( ${#conflicts[@]} == 0 )) && return 0
+    if ! interactive_mode; then
+      die "Port conflicts with existing inbounds in $MERGE_TARGET_CONFIG; provide non-conflicting ports via CLI flags"
+    fi
+    printf '检测到与已有 inbounds 端口冲突，需手动调整：\n'
+    for proto in "${conflicts[@]}"; do
+      port="$(get_protocol_port "$proto")"
+      owner="${MERGE_EXISTING_PORT_MAP[$port]}"
+      printf '  - %s 使用端口 %s，与现有 inbound [%s] 冲突\n' "$(protocol_label "$proto")" "$port" "$owner"
+    done
+    for proto in "${conflicts[@]}"; do
+      var="$(protocol_to_port_var "$proto")"
+      label="$(protocol_label "$proto")"
+      while true; do
+        read -r -p "请为 ${label} 输入新的端口: " raw
+        [[ "$raw" =~ ^[0-9]+$ ]] || { echo '[ERR] 端口必须是数字。' >&2; continue; }
+        (( raw >= 1 && raw <= 65535 )) || { echo '[ERR] 端口必须在 1-65535。' >&2; continue; }
+        if [[ -n "${MERGE_EXISTING_PORT_MAP[$raw]:-}" ]]; then
+          echo "[ERR] 端口 $raw 与现有 inbound 冲突（${MERGE_EXISTING_PORT_MAP[$raw]}）。" >&2
+          continue
+        fi
+        local duplicate=false
+        for other in "${PROTOCOL_KEYS[@]}"; do
+          [[ "$other" == "$proto" ]] && continue
+          [[ "$(get_protocol_state "$other")" == true ]] || continue
+          other_port="$(get_protocol_port "$other")"
+          if [[ "$raw" == "$other_port" ]]; then
+            duplicate=true
+            echo "[ERR] 端口 $raw 与 $(protocol_label "$other") 冲突。" >&2
+            break
+          fi
+        done
+        [[ "$duplicate" == true ]] && continue
+        printf -v "$var" '%s' "$raw"
+        break
+      done
+    done
+  done
+}
+
+merge_generated_inbounds_into_target_config() {
+  local target_config="$1" generated_config="$2"
+  python3 - "$target_config" "$generated_config" <<'PY'
+import json
+import os
+import sys
+
+target_path = sys.argv[1]
+generated_path = sys.argv[2]
+
+with open(target_path, encoding='utf-8') as f:
+    target = json.load(f)
+with open(generated_path, encoding='utf-8') as f:
+    generated = json.load(f)
+
+if not isinstance(target, dict) or not isinstance(target.get('inbounds'), list):
+    raise SystemExit('target config has no top-level inbounds array')
+if not isinstance(generated, dict) or not isinstance(generated.get('inbounds'), list):
+    raise SystemExit('generated config has no top-level inbounds array')
+
+target['inbounds'].extend(generated['inbounds'])
+tmp = target_path + '.tmp'
+with open(tmp, 'w', encoding='utf-8') as f:
+    json.dump(target, f, ensure_ascii=False, indent=2)
+    f.write('\n')
+os.replace(tmp, target_path)
+PY
+}
+
+validate_merge_config() {
+  if [[ "$MERGE_CONFIG_MODE" == "c" ]]; then
+    "$TARGET_BIN" check -c "$MERGE_CONFIG_VALUE"
+  else
+    "$TARGET_BIN" check -C "$MERGE_CONFIG_VALUE"
+  fi
+}
+
+apply_merge_mode_changes() {
+  local generated_server_config="$ARTIFACT_DIR/server/config.json" service_was_active=false
+  if systemctl is-active --quiet "$MERGE_SERVICE_NAME"; then
+    service_was_active=true
+  fi
+  MERGE_TARGET_BACKUP="$BACKUP_DIR/merge-target-config.bak"
+  cp -a "$MERGE_TARGET_CONFIG" "$MERGE_TARGET_BACKUP"
+  merge_generated_inbounds_into_target_config "$MERGE_TARGET_CONFIG" "$generated_server_config"
+  if ! validate_merge_config; then
+    warn 'Merge-mode config validation failed; restoring target config from backup'
+    cp -a "$MERGE_TARGET_BACKUP" "$MERGE_TARGET_CONFIG"
+    die 'Merged config check failed and has been rolled back'
+  fi
+  if [[ "$service_was_active" == true ]]; then
+    if ! systemctl restart "$MERGE_SERVICE_NAME"; then
+      warn 'Restart failed after merge; restoring previous config and retrying original service state'
+      cp -a "$MERGE_TARGET_BACKUP" "$MERGE_TARGET_CONFIG"
+      systemctl restart "$MERGE_SERVICE_NAME" >/dev/null 2>&1 || systemctl start "$MERGE_SERVICE_NAME" >/dev/null 2>&1 || true
+      die 'Merged config was rolled back because service restart failed'
+    fi
+  else
+    if ! systemctl start "$MERGE_SERVICE_NAME"; then
+      warn 'Service start failed after merge; restoring previous config'
+      cp -a "$MERGE_TARGET_BACKUP" "$MERGE_TARGET_CONFIG"
+      systemctl start "$MERGE_SERVICE_NAME" >/dev/null 2>&1 || true
+      die 'Merged config was rolled back because service start failed'
+    fi
+  fi
+  systemctl --no-pager --full status "$MERGE_SERVICE_NAME" || true
 }
 remove_acme_domain_artifacts() {
   local domain="$1"
@@ -1176,6 +1767,12 @@ run_export_only_flow() {
   return 0
 }
 show_incremental_plan() {
+  if [[ "$DEPLOY_MODE" == "merge" ]]; then
+    printf '配置增量计划：\n'
+    printf '  - 目标配置已识别协议：%s\n' "$(format_protocol_list "${MERGE_DETECTED_PROTOCOLS[@]}")"
+    printf '  - 本次拟新增协议：%s\n' "$(format_protocol_list "${TARGET_PROTOCOLS[@]}")"
+    return 0
+  fi
   printf '配置增量计划：\n'
   printf '  - 当前已配置：%s\n' "$(format_protocol_list "${CURRENT_PROTOCOLS[@]}")"
   printf '  - 拟新增协议：%s\n' "$(format_protocol_list "${ADD_PROTOCOLS[@]}")"
@@ -1346,6 +1943,10 @@ while [[ $# -gt 0 ]]; do
     --bin-dir) require_value "$1" "${2-}"; BIN_DIR="$2"; shift 2 ;;
     --config-dir) require_value "$1" "${2-}"; CONFIG_DIR="$2"; shift 2 ;;
     --service-name) require_value "$1" "${2-}"; SERVICE_NAME="$2"; shift 2 ;;
+    --merge-into-existing) DEPLOY_MODE='merge'; DEPLOY_MODE_SOURCE='flag'; shift ;;
+    --standalone) DEPLOY_MODE='standalone'; DEPLOY_MODE_SOURCE='flag'; shift ;;
+    --merge-config-dir) require_value "$1" "${2-}"; MERGE_CONFIG_DIR_HINT="$2"; shift 2 ;;
+    --merge-service-name) require_value "$1" "${2-}"; MERGE_SERVICE_NAME_HINT="$2"; shift 2 ;;
     --artifact-dir) require_value "$1" "${2-}"; USER_ARTIFACT_DIR="$2"; shift 2 ;;
     --backup-dir) require_value "$1" "${2-}"; USER_BACKUP_DIR="$2"; shift 2 ;;
     --work-dir) require_value "$1" "${2-}"; WORK_BASE="$2"; shift 2 ;;
@@ -1370,7 +1971,7 @@ require_command uname; require_command tar; require_command mktemp; require_comm
 acme_protocol_needed && require_command apt-get
 
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
-GEN_SCRIPT="$SCRIPT_DIR/gen-home.sh"
+GEN_SCRIPT="$SCRIPT_DIR/generate-sing-box-config.sh"
 [[ -x "$GEN_SCRIPT" ]] || die "Generator script not found or not executable: $GEN_SCRIPT"
 TIMESTAMP="$(date +%Y%m%d-%H%M%S)"
 WORK_ROOT="$(mktemp -d "$WORK_BASE/install-home.XXXXXX")"
@@ -1410,15 +2011,29 @@ BINARY_EXISTS=false; SERVICE_EXISTS=false; SERVICE_ACTIVE=false; CONFIG_EXISTS=f
 service_exists && SERVICE_EXISTS=true || true
 if [[ "$SERVICE_EXISTS" == true ]]; then service_active && SERVICE_ACTIVE=true || true; fi
 [[ -f "$TARGET_CONFIG" ]] && CONFIG_EXISTS=true
-load_existing_state
-apply_existing_protocol_ports
-show_environment_status
 if [[ "$RUN_UNINSTALL" == true ]]; then
   run_uninstall_flow
   exit 0
 fi
 show_main_menu_if_needed
-if [[ "$BINARY_EXISTS" == true && "$SERVICE_EXISTS" == true && "$SERVICE_ACTIVE" == true ]]; then
+collect_deploy_mode_if_needed
+if [[ "$DEPLOY_MODE" == "merge" ]]; then
+  setup_merge_mode_target
+  BINARY_EXISTS=false; SERVICE_EXISTS=false; SERVICE_ACTIVE=false; CONFIG_EXISTS=false
+  [[ -x "$TARGET_BIN" ]] && BINARY_EXISTS=true
+  service_exists && SERVICE_EXISTS=true || true
+  if [[ "$SERVICE_EXISTS" == true ]]; then service_active && SERVICE_ACTIVE=true || true; fi
+  [[ -f "$TARGET_CONFIG" ]] && CONFIG_EXISTS=true
+  SHOULD_UPDATE_BINARY=false
+fi
+load_existing_state
+if [[ "$DEPLOY_MODE" == "merge" ]]; then
+  MERGE_DETECTED_PROTOCOLS=("${CURRENT_PROTOCOLS[@]}")
+else
+  apply_existing_protocol_ports
+fi
+show_environment_status
+if [[ "$DEPLOY_MODE" == "standalone" && "$BINARY_EXISTS" == true && "$SERVICE_EXISTS" == true && "$SERVICE_ACTIVE" == true ]]; then
   if [[ "$FORCE_BINARY_UPDATE" == true ]]; then
     SHOULD_UPDATE_BINARY=true
     log 'Existing sing-box detected; forcing binary update because --force-binary-update was provided'
@@ -1428,24 +2043,38 @@ if [[ "$BINARY_EXISTS" == true && "$SERVICE_EXISTS" == true && "$SERVICE_ACTIVE"
   fi
 fi
 if interactive_mode && ! protocol_flags_provided; then collect_interactive_protocol_selection; fi
+if [[ "$DEPLOY_MODE" == "merge" ]]; then
+  CURRENT_PROTOCOLS=()
+  unset CURRENT_PROTOCOL_PORTS
+  declare -gA CURRENT_PROTOCOL_PORTS=()
+fi
 apply_incremental_protocol_plan
 show_incremental_plan
 collect_reset_protocols_if_needed
 collect_reset_certificates_if_needed
 collect_protocol_specific_inputs
 validate_unique_enabled_ports
+if [[ "$DEPLOY_MODE" == "merge" ]]; then
+  validate_ports_against_merge_target
+fi
 reset_protocol_credentials_if_needed
-backup_target "$TARGET_CONFIG" config; backup_target "$SERVICE_FILE" service; backup_target "$INSTALLER_STATE_FILE" installer-state; backup_target "$VGR_ENV_FILE" vgr-env; backup_target "$SHARED_SECRET_ENV_FILE" shared-secret-env; backup_target "$ACME_META_FILE" acme-meta; backup_target "$HY2_KEY_FILE" hy2-key; backup_target "$HY2_CERT_PEM" hy2-cert-pem; backup_target "$HY2_CERT_CRT" hy2-cert-crt; backup_target "$DEFAULT_TLS_CERT_DIR" default-cert-dir; backup_target "$HY2_CERT_DIR" hysteria-cert-dir; backup_target "$ACME_HOME" acme-home
-if [[ "$SHOULD_UPDATE_BINARY" == true ]]; then backup_target "$TARGET_BIN" binary; else touch "$BACKUP_DIR/binary.absent"; fi
-ROLLBACK_ACTIVE=true
+if [[ "$DEPLOY_MODE" == "standalone" ]]; then
+  backup_target "$TARGET_CONFIG" config; backup_target "$SERVICE_FILE" service; backup_target "$INSTALLER_STATE_FILE" installer-state; backup_target "$VGR_ENV_FILE" vgr-env; backup_target "$SHARED_SECRET_ENV_FILE" shared-secret-env; backup_target "$ACME_META_FILE" acme-meta; backup_target "$HY2_KEY_FILE" hy2-key; backup_target "$HY2_CERT_PEM" hy2-cert-pem; backup_target "$HY2_CERT_CRT" hy2-cert-crt; backup_target "$DEFAULT_TLS_CERT_DIR" default-cert-dir; backup_target "$HY2_CERT_DIR" hysteria-cert-dir; backup_target "$ACME_HOME" acme-home
+  if [[ "$SHOULD_UPDATE_BINARY" == true ]]; then backup_target "$TARGET_BIN" binary; else touch "$BACKUP_DIR/binary.absent"; fi
+  ROLLBACK_ACTIVE=true
+else
+  ROLLBACK_ACTIVE=false
+fi
 
-if [[ "$SHOULD_UPDATE_BINARY" == true ]]; then
+if [[ "$DEPLOY_MODE" == "standalone" && "$SHOULD_UPDATE_BINARY" == true ]]; then
   prepare_release_binary
   log "Installing sing-box binary to $TARGET_BIN"
   install -m 0755 "$RELEASE_BIN" "$TARGET_BIN_NEW"
   mv -f "$TARGET_BIN_NEW" "$TARGET_BIN"
-else
+elif [[ "$DEPLOY_MODE" == "standalone" ]]; then
   log 'Skipping sing-box binary download/replace; keeping existing binary'
+else
+  log "Merge mode: keep existing binary at $TARGET_BIN"
 fi
 
 [[ -x "$TARGET_BIN" ]] || die "sing-box binary not found at $TARGET_BIN"
@@ -1501,7 +2130,7 @@ if [[ "$ENABLE_ANYTLS" == true ]]; then GEN_ARGS+=(--enable-anytls --anytls-port
 if [[ "$ENABLE_VGR" == true ]]; then GEN_ARGS+=(--enable-vless-grpc-reality --vless-grpc-reality-port "$VGR_PORT" --vless-grpc-reality-server-name "$VGR_SERVER_NAME" --vless-grpc-reality-service-name "$VGR_SERVICE_NAME" --vless-grpc-reality-private-key "$VGR_PRIVATE_KEY" --vless-grpc-reality-public-key "$VGR_PUBLIC_KEY" --vless-grpc-reality-short-id "$VGR_SHORT_ID" --vless-grpc-reality-uuid "$VGR_UUID"); else GEN_ARGS+=(--disable-vless-grpc-reality); fi
 if [[ "$ENABLE_VBR" == true ]]; then GEN_ARGS+=(--enable-vless-brutal-reality --vless-brutal-reality-port "$VBR_PORT" --vless-brutal-reality-server-name "$VBR_SERVER_NAME" --vless-brutal-reality-private-key "$VGR_PRIVATE_KEY" --vless-brutal-reality-public-key "$VGR_PUBLIC_KEY" --vless-brutal-reality-short-id "$VBR_SHORT_ID" --vless-brutal-reality-uuid "$VBR_UUID" --vless-brutal-reality-up-mbps "$VBR_UP_MBPS" --vless-brutal-reality-down-mbps "$VBR_DOWN_MBPS"); else GEN_ARGS+=(--disable-vless-brutal-reality); fi
 
-log 'Generating deployment bundle via gen-home.sh'
+log 'Generating deployment bundle via generate-sing-box-config.sh'
 "$GEN_SCRIPT" "${GEN_ARGS[@]}"
 [[ -f "$ARTIFACT_DIR/server/config.json" ]] || die 'Generated config missing'
 [[ -f "$ARTIFACT_DIR/server/sing-box.service" ]] || die 'Generated service file missing'
@@ -1518,19 +2147,24 @@ print(json.load(open('$ARTIFACT_DIR/manifest.json'))['protocols']['hysteria2']['
 PY
 )"; fi
 
-install -m 0644 "$ARTIFACT_DIR/server/config.json" "$TARGET_CONFIG"
-install -m 0644 "$ARTIFACT_DIR/server/sing-box.service" "$SERVICE_FILE"
 TARGET_PROTOCOLS=()
 for proto in "${PROTOCOL_KEYS[@]}"; do
   [[ "$(get_protocol_state "$proto")" == true ]] && TARGET_PROTOCOLS+=("$proto")
 done
-write_installer_state
-log 'Running config validation'
-"$TARGET_BIN" check -c "$TARGET_CONFIG"
-systemctl daemon-reload
-systemctl enable "$SERVICE_NAME"
-if systemctl is-active --quiet "$SERVICE_NAME"; then systemctl restart "$SERVICE_NAME"; else systemctl start "$SERVICE_NAME"; fi
-systemctl --no-pager --full status "$SERVICE_NAME" || true
+if [[ "$DEPLOY_MODE" == "standalone" ]]; then
+  install -m 0644 "$ARTIFACT_DIR/server/config.json" "$TARGET_CONFIG"
+  install -m 0644 "$ARTIFACT_DIR/server/sing-box.service" "$SERVICE_FILE"
+  write_installer_state
+  log 'Running config validation'
+  "$TARGET_BIN" check -c "$TARGET_CONFIG"
+  systemctl daemon-reload
+  systemctl enable "$SERVICE_NAME"
+  if systemctl is-active --quiet "$SERVICE_NAME"; then systemctl restart "$SERVICE_NAME"; else systemctl start "$SERVICE_NAME"; fi
+  systemctl --no-pager --full status "$SERVICE_NAME" || true
+else
+  log "Merge mode: appending generated inbounds to $MERGE_TARGET_CONFIG"
+  apply_merge_mode_changes
+fi
 
 ROLLBACK_ACTIVE=false
 log 'Deployment completed'

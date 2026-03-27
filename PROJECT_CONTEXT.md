@@ -1,8 +1,68 @@
-# home 脚本说明
+# 项目上下文说明
+
+## 合并到已有 sing-box 配置（2026-03-28 起）
+
+`install-sing-box-home.sh` 新增了第二种运行模式：
+
+- `独立部署回家 sing-box`
+- `合并到已有 sing-box 配置`
+
+其中“合并模式”的目标不是替换用户已有的代理配置，而是把本项目生成的**服务端 inbounds** 追加进用户现有 sing-box 配置里，让同一个 sing-box 进程继续保留原有代理能力，同时增加“回家入口”。
+
+### 合并模式的处理边界
+
+合并模式只做这些事：
+
+- 探测已有 sing-box service 与配置路径
+- 生成本次所需的服务端 inbounds
+- 只把生成出来的 `inbounds` 追加到目标配置的 `inbounds` 数组末尾
+- 检查冲突、备份目标文件、执行 `sing-box check`
+- 校验通过后自动重启原有 service
+
+合并模式明确**不会**做这些事：
+
+- 不覆盖用户现有 `outbounds`
+- 不修改 `route` / `dns` / `log` / `experimental`
+- 不覆盖原有 systemd unit
+- 不替换用户现有 sing-box 二进制
+
+### 目标配置定位规则
+
+脚本优先从现有 service 的 `ExecStart` 推断配置位置，支持：
+
+- `run -c <config.json>`
+- `run -C <conf-dir>`
+- `run -D <workdir>`
+
+其中：
+
+- `-c`：直接修改该 JSON 文件的顶层 `inbounds`
+- `-C`：扫描目录，找到**第一个**带顶层 `inbounds` 数组的 JSON 并修改它
+- `-D`：优先尝试 `<workdir>/config.json`，找不到再尝试 `<workdir>/conf/`
+
+如果自动探测失败、或存在多个 service 导致歧义，则允许用户手动指定：
+
+- `--merge-config-dir <path>`
+- `--merge-service-name <name>`
+
+### 端口冲突与回滚策略
+
+合并模式会先扫描目标配置中现有的 inbound 监听端口。
+
+如果本次新增协议的端口与已有 inbound 冲突：
+
+- 交互模式下：提示用户重新输入端口，直到无冲突为止
+- 非交互模式下：直接失败退出，要求用 CLI 显式传入不冲突端口
+
+写入前会先备份目标配置；若发生以下任一情况，会自动恢复旧配置：
+
+- `sing-box check` 失败
+- `systemctl restart` 失败
+- `systemctl start` 失败
 
 ## 增量更新行为（2026-03-20 起）
 
-`install-home.sh` 现在区分 **首次安装** 和 **已有安装上的增量更新**，并把交互顺序调整为：
+`install-sing-box-home.sh` 现在区分 **首次安装** 和 **已有安装上的增量更新**，并把交互顺序调整为：
 
 1. 先检查当前环境
 2. 先展示现状
@@ -121,10 +181,10 @@
 
 现在这套脚本分两层：
 
-- `gen-home.sh`
+- `generate-sing-box-config.sh`
   - 配置生成器
   - 生成 sing-box 服务端配置、systemd 模板、客户端片段、manifest
-- `install-home.sh`
+- `install-sing-box-home.sh`
   - 一键安装部署器
   - 在目标 Linux 机器上下载 sing-box、准备证书/凭据、生成配置、写入 systemd、校验并启动
 
@@ -150,10 +210,10 @@
 交互模式：
 
 ```bash
-sudo ./install-home.sh
+sudo ./install-sing-box-home.sh
 
 # 非交互直接卸载
-sudo ./install-home.sh --uninstall
+sudo ./install-sing-box-home.sh --uninstall
 ```
 
 流程：
@@ -171,10 +231,13 @@ sudo ./install-home.sh --uninstall
    - 选择 `2) 卸载` 会二次确认，并删除脚本管理的 `sing-box`、service、配置目录与 ACME 域名证书数据（不处理 brutal）
    - 选择 `4) 导出客户端节点信息` 会复用最近一次安装产物目录，先在 shell 展示节点信息，再询问是否导出
    - 导出询问里回车默认导出到 `/root`，也支持输入其他目录
-3. 如果检测到 sing-box 已安装且 service 正在运行，先问：
+3. 如果进入“配置 sing-box 回家”，再选择部署模式
+   - `1) 独立部署回家 sing-box`
+   - `2) 合并到已有 sing-box 配置（仅追加 inbounds）`
+4. 独立部署模式下，如果检测到 sing-box 已安装且 service 正在运行，先问：
    - `是否覆盖更新二进制？ [y/N]`
    - 默认仍是 **N**
-4. 再选择协议组合
+5. 再选择协议组合
    - 回车默认：`1,2`
    - 也就是只默认启用 **Hy2 + SS**
    - 也可以直接输入 `7` 表示 **安装所有**
@@ -184,22 +247,26 @@ sudo ./install-home.sh --uninstall
    - 这是刻意保守的默认值：
      - 不默认开启需要 ACME 的 `Trojan / AnyTLS`
      - 也不默认开启需要 brutal 内核能力的 `VLESS Brutal Reality`
-5. 展示配置增量计划
-   - 当前已配置
-   - 拟新增协议
-   - 已存在并保留
-   - 未选但仍保留
-6. 再问是否重置已有协议
+6. 展示配置增量计划
+   - 独立部署模式下：
+     - 当前已配置
+     - 拟新增协议
+     - 已存在并保留
+     - 未选但仍保留
+   - 合并模式下：
+     - 目标配置已识别协议
+     - 本次拟新增协议
+7. 独立部署模式下，再问是否重置已有协议
    - 默认 **不重置**
    - 会显示可重置协议的编号清单
    - 支持输入 `7` 一键重置“上述全部协议”
    - 若重置里包含 `Trojan/AnyTLS`，且检测到已有证书，会额外询问是否重置证书
    - 若选择“不重置证书”，脚本会优先复用已有证书和域名，通常不再要求重新输入 DDNS
-7. 最后才收集参数
+8. 最后才收集参数
    - `DDNS 域名 / 公网 IP`（用于申请证书，并复用到客户端配置的 `server`）
    - 端口
    - 如果本次新增/重置了 `Trojan` 或 `AnyTLS`，才继续问 ACME / Cloudflare 参数
-8. 如果只是保留已有协议、只新增部分协议，脚本会尽量只问本次确实需要的参数
+9. 如果只是保留已有协议、只新增部分协议，脚本会尽量只问本次确实需要的参数
    - 例如端口只会针对“新增或重置”的协议询问
    - 仅保留现有 `Trojan / AnyTLS` 时，若现有证书文件已存在，则直接复用，不重新申请 ACME 证书
    - 如果这次需要重新申请 ACME，但申请失败：
@@ -207,8 +274,9 @@ sudo ./install-home.sh --uninstall
      - 会自动跳过 `Trojan / AnyTLS`
      - 其他如 `SS / Hy2 / VLESS gRPC Reality / VLESS Brutal Reality` 继续安装
      - 终端会提示类似：`Trojan/AnyTLS skipped because ACME failed`
-9. 如果启用了 `VLESS Brutal Reality`，脚本会先探测环境并尝试安装 brutal；失败则跳过该协议，其他协议继续
-10. 安装完成后，进入客户端节点导出向导
+10. 如果启用了 `VLESS Brutal Reality`，脚本会先探测环境并尝试安装 brutal；失败则跳过该协议，其他协议继续
+11. 合并模式在写入前会先备份目标配置；`sing-box check` 通过后自动重启原有 service，失败则回滚
+12. 安装完成后，进入客户端节点导出向导
    - 可选：`1) 生成 sing-box 节点` / `2) 生成 clash/mihomo 节点` / `3) 全部生成` / `0) 跳过`
    - 会先在终端展示本次已完成协议对应的客户端片段
    - 同时写入 `/root/sing-box-nodes.json` 和/或 `/root/clash-nodes.yaml`
@@ -345,7 +413,7 @@ manifest 里会记录 `vless_brutal_reality` 字段，以及它是否与 `vless_
 
 ---
 
-## gen-home.sh 当前输出
+## generate-sing-box-config.sh 当前输出
 
 客户端片段支持：
 
@@ -370,7 +438,7 @@ manifest 里会记录 `vless_brutal_reality` 字段，以及它是否与 `vless_
 
 ---
 
-## install-home.sh 输出摘要
+## install-sing-box-home.sh 输出摘要
 
 安装完成后会输出：
 
@@ -402,13 +470,21 @@ manifest 里会记录 `vless_brutal_reality` 字段，以及它是否与 `vless_
 
 目前已做的静态验证目标应包括：
 
-- `bash -n scripts/install-home.sh`
-- `bash -n scripts/gen-home.sh`
+- `bash -n install-sing-box-home.sh`
+- `bash -n generate-sing-box-config.sh`
 - grep 检查以下关键点是否存在：
   - `VLESS Brutal Reality: skipped`
   - `--enable-vless-brutal-reality`
   - `vless_brutal_reality`
   - `brutal_status`
+
+与 merge 模式直接相关的验证项还应包括：
+
+- `run -c` 配置能否正确定位到单文件 `config.json`
+- `run -C` 配置能否命中第一个带顶层 `inbounds` 的 JSON
+- `run -D` 工作目录模式能否正确回落到 `config.json` 或 `conf/`
+- 冲突端口能否正确识别并要求手动重填
+- `check` 失败与 `restart` 失败时，目标配置是否都会自动回滚
 
 仍需在真实目标机继续验证的点：
 
