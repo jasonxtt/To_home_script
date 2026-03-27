@@ -8,18 +8,6 @@
 - `gen-home.sh`：配置与产物生成脚本
 - `README-home-ss.md`：详细说明（协议、交互流程、增量更新行为等）
 
-## 快速开始
-
-```bash
-sudo ./install-home.sh
-```
-
-非交互卸载：
-
-```bash
-sudo ./install-home.sh --uninstall
-```
-
 ## curl 一键运行（无需 git clone）
 
 直接运行（默认就是当前仓库）：
@@ -49,6 +37,36 @@ curl -fsSL https://raw.githubusercontent.com/jasonxtt/To_home_script/main/bootst
 ```bash
 curl -fsSL https://raw.githubusercontent.com/jasonxtt/To_home_script/main/bootstrap.sh | \
   bash -s -- --repo <owner>/<repo> --ref <branch-or-tag>
+```
+
+## 本地运行（需先把脚本放到本地）
+
+方式 1：`git clone`
+
+```bash
+git clone https://github.com/jasonxtt/To_home_script.git
+cd To_home_script
+chmod +x install-home.sh gen-home.sh
+```
+
+方式 2：仅下载脚本
+
+```bash
+curl -fsSLO https://raw.githubusercontent.com/jasonxtt/To_home_script/main/install-home.sh
+curl -fsSLO https://raw.githubusercontent.com/jasonxtt/To_home_script/main/gen-home.sh
+chmod +x install-home.sh gen-home.sh
+```
+
+准备好两个脚本后，再执行：
+
+```bash
+sudo ./install-home.sh
+```
+
+非交互卸载：
+
+```bash
+sudo ./install-home.sh --uninstall
 ```
 
 ## 文档
