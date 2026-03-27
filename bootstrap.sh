@@ -112,10 +112,22 @@ download_file "${BASE_URL}/gen-home.sh" "${WORK_DIR}/gen-home.sh"
 chmod +x "${WORK_DIR}/install-home.sh" "${WORK_DIR}/gen-home.sh"
 
 cd "$WORK_DIR"
+run_installer() {
+  # Support interactive prompts even when bootstrap is executed via pipe
+  # (e.g. curl ... | bash). In that case stdin is not a TTY.
+  if [[ -t 0 ]]; then
+    "$@"
+  elif [[ -r /dev/tty ]]; then
+    "$@" < /dev/tty
+  else
+    "$@"
+  fi
+}
+
 if [[ "$(id -u)" -eq 0 ]]; then
-  ./install-home.sh "${FORWARD_ARGS[@]}"
+  run_installer ./install-home.sh "${FORWARD_ARGS[@]}"
 elif command -v sudo >/dev/null 2>&1; then
-  sudo ./install-home.sh "${FORWARD_ARGS[@]}"
+  run_installer sudo ./install-home.sh "${FORWARD_ARGS[@]}"
 else
   die 'Please run as root or install sudo'
 fi
