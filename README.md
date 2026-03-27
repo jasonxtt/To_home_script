@@ -22,27 +22,33 @@ sudo ./install-home.sh --uninstall
 
 ## curl 一键运行（无需 git clone）
 
-当前仓库示例：
+直接运行（默认就是当前仓库）：
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/jasonxtt/To_home_script/main/bootstrap.sh | \
-  bash -s -- --repo jasonxtt/To_home_script
+curl -fsSL https://raw.githubusercontent.com/jasonxtt/To_home_script/main/bootstrap.sh | bash
 ```
 
 说明：上述管道方式会自动回连 `/dev/tty`，可正常进入交互安装。
 
-给 `install-home.sh` 传参时，在后面加 `--`：
+给 `install-home.sh` 透传参数时，直接写在后面即可：
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/jasonxtt/To_home_script/main/bootstrap.sh | \
-  bash -s -- --repo jasonxtt/To_home_script -- --uninstall
+  bash -s -- --uninstall
 ```
 
 如果你想完全非交互运行（避免任何提问），可直接透传参数：
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/jasonxtt/To_home_script/main/bootstrap.sh | \
-  bash -s -- --repo jasonxtt/To_home_script -- --host <你的域名或公网IP>
+  bash -s -- --host <你的域名或公网IP>
+```
+
+如果未来仓库地址或分支变化，也支持覆盖：
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/jasonxtt/To_home_script/main/bootstrap.sh | \
+  bash -s -- --repo <owner>/<repo> --ref <branch-or-tag>
 ```
 
 ## 文档

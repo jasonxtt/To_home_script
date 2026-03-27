@@ -6,21 +6,23 @@ usage() {
 Bootstrap installer for to_home_script.
 
 Usage:
-  bash bootstrap.sh --repo <owner/repo> [options] [-- <install-home args...>]
+  bash bootstrap.sh [bootstrap-options] [install-home args...]
 
-Options:
-  --repo <owner/repo>     GitHub repository, e.g. tom/to_home_script
+Bootstrap options:
+  --repo <owner/repo>     GitHub repository (default: jasonxtt/To_home_script)
   --ref <git-ref>         Git ref/branch/tag (default: main)
   --raw-host <host>       Raw host (default: raw.githubusercontent.com)
   --keep-workdir          Keep temporary working directory for debugging
   -h, --help              Show this help
 
 Examples:
-  curl -fsSL https://raw.githubusercontent.com/<owner>/<repo>/main/bootstrap.sh | \
-    bash -s -- --repo <owner>/<repo>
+  curl -fsSL https://raw.githubusercontent.com/jasonxtt/To_home_script/main/bootstrap.sh | bash
 
-  curl -fsSL https://raw.githubusercontent.com/<owner>/<repo>/main/bootstrap.sh | \
-    bash -s -- --repo <owner>/<repo> -- --uninstall
+  curl -fsSL https://raw.githubusercontent.com/jasonxtt/To_home_script/main/bootstrap.sh | \
+    bash -s -- --uninstall
+
+  curl -fsSL https://raw.githubusercontent.com/jasonxtt/To_home_script/main/bootstrap.sh | \
+    bash -s -- --repo jasonxtt/To_home_script --host your.example.com
 EOF
 }
 
@@ -47,7 +49,7 @@ download_file() {
   esac
 }
 
-REPO="${TO_HOME_REPO:-}"
+REPO="${TO_HOME_REPO:-jasonxtt/To_home_script}"
 REF="${TO_HOME_REF:-main}"
 RAW_HOST="${TO_HOME_RAW_HOST:-raw.githubusercontent.com}"
 KEEP_WORKDIR="false"
@@ -85,12 +87,12 @@ while [[ $# -gt 0 ]]; do
       break
       ;;
     *)
-      die "Unknown option: $1 (use -- to pass args to install-home.sh)"
+      FORWARD_ARGS+=("$1")
+      shift
       ;;
   esac
 done
 
-[[ -n "$REPO" ]] || die "Missing --repo <owner/repo>"
 [[ "$REPO" =~ ^[A-Za-z0-9._-]+/[A-Za-z0-9._-]+$ ]] || die "Invalid --repo format: $REPO"
 [[ -n "$REF" ]] || die "Invalid --ref"
 [[ -n "$RAW_HOST" ]] || die "Invalid --raw-host"
