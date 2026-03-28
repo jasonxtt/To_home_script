@@ -1268,7 +1268,7 @@ discover_merge_candidates() {
   MERGE_CANDIDATES=()
   while IFS= read -r unit; do
     [[ "$unit" == *.service ]] || continue
-    execstart_line="$(extract_service_execstart_line "$unit")"
+    execstart_line="$(extract_service_execstart_line "$unit" 2>/dev/null || true)"
     [[ -n "$execstart_line" ]] || continue
     mapfile -t _meta < <(parse_singbox_execstart "$execstart_line" 2>/dev/null || true)
     (( ${#_meta[@]} == 3 )) || continue
@@ -1522,7 +1522,7 @@ setup_merge_mode_target() {
     if (( ${#MERGE_CANDIDATES[@]} > 1 )); then
       warn 'Multiple sing-box services were detected; manual config path input is required'
     else
-      warn 'No sing-box service with detectable run -c/-C was found; manual config path input is required'
+      warn 'No sing-box service with detectable run -c/-C/-D was found; manual config path input is required'
     fi
     prompt_merge_config_path_if_needed
   fi
