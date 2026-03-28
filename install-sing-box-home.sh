@@ -1265,15 +1265,20 @@ PY
 
 discover_merge_candidates() {
   local unit execstart_line
+  local -a unit_list=()
   MERGE_CANDIDATES=()
-  while IFS= read -r unit; do
+  mapfile -t unit_list < <(systemctl list-unit-files --type=service --no-legend 2>/dev/null | awk '{print $1}' | grep -Ei 'sing-?box.*\.service$' | sort -u || true)
+  if (( ${#unit_list[@]} == 0 )); then
+    mapfile -t unit_list < <(systemctl list-unit-files --type=service --no-legend 2>/dev/null | awk '{print $1}' | sort -u)
+  fi
+  for unit in "${unit_list[@]}"; do
     [[ "$unit" == *.service ]] || continue
     execstart_line="$(extract_service_execstart_line "$unit" 2>/dev/null || true)"
     [[ -n "$execstart_line" ]] || continue
     mapfile -t _meta < <(parse_singbox_execstart "$execstart_line" 2>/dev/null || true)
     (( ${#_meta[@]} == 3 )) || continue
     MERGE_CANDIDATES+=("${unit}|${_meta[0]}|${_meta[1]}|${_meta[2]}")
-  done < <(systemctl list-unit-files --type=service --no-legend 2>/dev/null | awk '{print $1}' | sort -u)
+  done
 }
 
 json_has_top_level_inbounds_array() {
