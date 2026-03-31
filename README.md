@@ -68,6 +68,12 @@ sudo ./install-sing-box-home.sh
 - 独立部署回家 sing-box
 - 合并到已有 sing-box 配置（仅追加 `inbounds`）
 
+安装完成后，脚本会：
+
+- 在 shell 里直接打印本次生成的客户端节点片段
+- 默认导出到 `/root/sing-box-nodes.json`
+- 如果生成了 mihomo/clash 片段，也会默认导出到 `/root/clash-nodes.yaml`
+
 非交互强制合并模式：
 
 ```bash

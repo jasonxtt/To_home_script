@@ -16,7 +16,7 @@ Interactive prompts:
   - Protocol selection: prompt shown if protocol enable/disable flags are not provided; Enter defaults to 1,2
   - Optional custom ports: prompt order follows Hy2 / SS / VLESS gRPC Reality / Trojan / AnyTLS / VLESS Brutal Reality
   - If Trojan / AnyTLS is enabled, ACME + Cloudflare inputs are prompted after DDNS/port collection
-  - Install finished: optional client node export prompt (sing-box / clash / all)
+  - Install finished: print client snippets and export to /root by default
 
 Core options:
   --host <host>                               Public host / DDNS / IP used by clients
@@ -606,19 +606,31 @@ collect_generated_client_snippets() {
   CLIENT_SB_SNIPPETS=()
   CLIENT_CLASH_SNIPPETS=()
   local base="$ARTIFACT_DIR/client"
-  [[ -f "$base/hy2-singbox-outbound.json" ]] && CLIENT_SB_SNIPPETS+=("$base/hy2-singbox-outbound.json")
-  [[ -f "$base/ss-singbox-outbound.json" ]] && CLIENT_SB_SNIPPETS+=("$base/ss-singbox-outbound.json")
-  [[ -f "$base/trojan-singbox-outbound.json" ]] && CLIENT_SB_SNIPPETS+=("$base/trojan-singbox-outbound.json")
-  [[ -f "$base/anytls-singbox-outbound.json" ]] && CLIENT_SB_SNIPPETS+=("$base/anytls-singbox-outbound.json")
-  [[ -f "$base/vless-grpc-reality-singbox-outbound.json" ]] && CLIENT_SB_SNIPPETS+=("$base/vless-grpc-reality-singbox-outbound.json")
-  [[ -f "$base/vless-brutal-reality-singbox-outbound.json" ]] && CLIENT_SB_SNIPPETS+=("$base/vless-brutal-reality-singbox-outbound.json")
+  local file
 
-  [[ -f "$base/hy2-mihomo-proxy.yaml" ]] && CLIENT_CLASH_SNIPPETS+=("$base/hy2-mihomo-proxy.yaml")
-  [[ -f "$base/ss-mihomo-proxy.yaml" ]] && CLIENT_CLASH_SNIPPETS+=("$base/ss-mihomo-proxy.yaml")
-  [[ -f "$base/trojan-mihomo-proxy.yaml" ]] && CLIENT_CLASH_SNIPPETS+=("$base/trojan-mihomo-proxy.yaml")
-  [[ -f "$base/anytls-mihomo-proxy.yaml" ]] && CLIENT_CLASH_SNIPPETS+=("$base/anytls-mihomo-proxy.yaml")
-  [[ -f "$base/vless-grpc-reality-mihomo-proxy.yaml" ]] && CLIENT_CLASH_SNIPPETS+=("$base/vless-grpc-reality-mihomo-proxy.yaml")
-  [[ -f "$base/vless-brutal-reality-mihomo-proxy.yaml" ]] && CLIENT_CLASH_SNIPPETS+=("$base/vless-brutal-reality-mihomo-proxy.yaml")
+  for file in \
+    "$base/hy2-singbox-outbound.json" \
+    "$base/ss-singbox-outbound.json" \
+    "$base/trojan-singbox-outbound.json" \
+    "$base/anytls-singbox-outbound.json" \
+    "$base/vless-grpc-reality-singbox-outbound.json" \
+    "$base/vless-brutal-reality-singbox-outbound.json"; do
+    if [[ -f "$file" ]]; then
+      CLIENT_SB_SNIPPETS+=("$file")
+    fi
+  done
+
+  for file in \
+    "$base/hy2-mihomo-proxy.yaml" \
+    "$base/ss-mihomo-proxy.yaml" \
+    "$base/trojan-mihomo-proxy.yaml" \
+    "$base/anytls-mihomo-proxy.yaml" \
+    "$base/vless-grpc-reality-mihomo-proxy.yaml" \
+    "$base/vless-brutal-reality-mihomo-proxy.yaml"; do
+    if [[ -f "$file" ]]; then
+      CLIENT_CLASH_SNIPPETS+=("$file")
+    fi
+  done
 }
 
 show_client_snippets() {
@@ -636,242 +648,21 @@ show_client_snippets() {
 export_singbox_nodes_to_root() {
   local base_dir="${1:-/root}"
   local out_file="$base_dir/sing-box-nodes.json"
+  (( ${#CLIENT_SB_SNIPPETS[@]} > 0 )) || return 0
   mkdir -p "$base_dir"
-  python3 - \
-    "$([[ "$ENABLE_HY2" == true ]] && echo true || echo false)" \
-    "$([[ "$ENABLE_SS" == true ]] && echo true || echo false)" \
-    "$([[ "$ENABLE_TROJAN" == true ]] && echo true || echo false)" \
-    "$([[ "$ENABLE_ANYTLS" == true ]] && echo true || echo false)" \
-    "$([[ "$ENABLE_VGR" == true ]] && echo true || echo false)" \
-    "$([[ "$ENABLE_VBR" == true ]] && echo true || echo false)" \
-    "$HOST" \
-    "$HY2_PORT" "$HY2_PASSWORD" "$HY2_SNI" \
-    "$PORT" "$METHOD" "$PASSWORD" \
-    "$TROJAN_PORT" "$TROJAN_PASSWORD" "${ACME_DOMAIN:-$HOST}" \
-    "$ANYTLS_PORT" "$ANYTLS_PASSWORD" \
-    "$VGR_PORT" "$VGR_UUID" "$VGR_SERVER_NAME" "$VGR_PUBLIC_KEY" "$VGR_SHORT_ID" "$VGR_SERVICE_NAME" \
-    "$VBR_PORT" "$VBR_UUID" "$VBR_SERVER_NAME" "$VGR_PUBLIC_KEY" "$VBR_SHORT_ID" \
-    "$out_file" <<'PY'
+  python3 - "$out_file" "${CLIENT_SB_SNIPPETS[@]}" <<'PY'
 import json
-import copy
 import sys
 
-enabled = {
-    "hy2": sys.argv[1] == "true",
-    "ss": sys.argv[2] == "true",
-    "trojan": sys.argv[3] == "true",
-    "anytls": sys.argv[4] == "true",
-    "vgr": sys.argv[5] == "true",
-    "vbr": sys.argv[6] == "true",
-}
-
-vars_map = {
-    "HOST": sys.argv[7],
-    "HY2_PORT": int(sys.argv[8]),
-    "HY2_PASSWORD": sys.argv[9],
-    "HY2_SNI": sys.argv[10],
-    "SS_PORT": int(sys.argv[11]),
-    "SS_METHOD": sys.argv[12],
-    "SS_PASSWORD": sys.argv[13],
-    "TROJAN_PORT": int(sys.argv[14]),
-    "TROJAN_PASSWORD": sys.argv[15],
-    "TLS_SERVER_NAME": sys.argv[16],
-    "ANYTLS_PORT": int(sys.argv[17]),
-    "ANYTLS_PASSWORD": sys.argv[18],
-    "VGR_PORT": int(sys.argv[19]),
-    "VGR_UUID": sys.argv[20],
-    "VGR_SERVER_NAME": sys.argv[21],
-    "VGR_PUBLIC_KEY": sys.argv[22],
-    "VGR_SHORT_ID": sys.argv[23],
-    "VGR_SERVICE_NAME": sys.argv[24],
-    "VBR_PORT": int(sys.argv[25]),
-    "VBR_UUID": sys.argv[26],
-    "VBR_SERVER_NAME": sys.argv[27],
-    "VBR_PUBLIC_KEY": sys.argv[28],
-    "VBR_SHORT_ID": sys.argv[29],
-}
-out_file = sys.argv[30]
-
-data = [
-    {
-        "type": "vless",
-        "tag": "vless-brutal-in",
-        "server": "",
-        "server_port": 0,
-        "uuid": "",
-        "flow": "",
-        "packet_encoding": "xudp",
-        "tcp_fast_open": True,
-        "tls": {
-            "enabled": True,
-            "server_name": "",
-            "utls": {"enabled": True, "fingerprint": "chrome"},
-            "reality": {"enabled": True, "public_key": "", "short_id": ""},
-        },
-        "multiplex": {
-            "enabled": True,
-            "protocol": "h2mux",
-            "max_connections": 1,
-            "min_streams": 4,
-            "padding": True,
-            "brutal": {"enabled": True, "up_mbps": 1000, "down_mbps": 1000},
-        },
-    },
-    {
-        "type": "vless",
-        "tag": "vless-grpc-reality-in",
-        "server": "",
-        "server_port": 0,
-        "uuid": "",
-        "tls": {
-            "enabled": True,
-            "server_name": "",
-            "reality": {"enabled": True, "public_key": "", "short_id": ""},
-            "utls": {"enabled": True, "fingerprint": "chrome"},
-        },
-        "transport": {"type": "grpc", "service_name": ""},
-    },
-    {
-        "type": "shadowsocks",
-        "tag": "shadowsocks-in",
-        "server": "",
-        "server_port": 0,
-        "method": "",
-        "password": "",
-        "udp_over_tcp": False,
-    },
-    {
-        "type": "trojan",
-        "tag": "trojan-in-jygg",
-        "server": "",
-        "server_port": 0,
-        "password": "",
-        "tls": {
-            "enabled": True,
-            "server_name": "",
-            "utls": {"enabled": True, "fingerprint": "chrome"},
-        },
-        "multiplex": {
-            "enabled": True,
-            "protocol": "h2mux",
-            "max_connections": 1,
-            "min_streams": 4,
-            "padding": False,
-            "brutal": {"enabled": False, "up_mbps": 50, "down_mbps": 55},
-        },
-    },
-    {
-        "tag": "hy2-in",
-        "type": "hysteria2",
-        "server": "",
-        "server_port": 0,
-        "tcp_fast_open": False,
-        "up_mbps": 100,
-        "down_mbps": 60,
-        "password": "",
-        "tls": {"enabled": True, "server_name": "", "insecure": True, "alpn": ["h3"]},
-    },
-    {
-        "tag": "anytls-in",
-        "type": "anytls",
-        "server": "",
-        "server_port": 0,
-        "password": "",
-        "idle_session_check_interval": "30s",
-        "idle_session_timeout": "30s",
-        "min_idle_session": 5,
-        "tls": {
-            "enabled": True,
-            "server_name": "",
-            "utls": {"enabled": True, "fingerprint": "chrome"},
-        },
-    },
-]
-
-def proto_of(item):
-    typ = item.get("type", "")
-    tag = item.get("tag", "")
-    if typ == "hysteria2":
-        return "hy2"
-    if typ == "shadowsocks":
-        return "ss"
-    if typ == "trojan":
-        return "trojan"
-    if typ == "anytls":
-        return "anytls"
-    if typ == "vless":
-        transport = item.get("transport", {}) if isinstance(item.get("transport"), dict) else {}
-        if transport.get("type") == "grpc" or "grpc" in str(tag):
-            return "vgr"
-        multiplex = item.get("multiplex", {}) if isinstance(item.get("multiplex"), dict) else {}
-        brutal = multiplex.get("brutal", {}) if isinstance(multiplex.get("brutal"), dict) else {}
-        if brutal.get("enabled") is True or "brutal" in str(tag):
-            return "vbr"
-    return None
-
-def ensure(item, key, default):
-    if key not in item or not isinstance(item.get(key), dict):
-        item[key] = copy.deepcopy(default)
-    return item[key]
-
-def apply_vars(proto, item):
-    item["server"] = vars_map["HOST"]
-    if proto == "hy2":
-        item["server_port"] = vars_map["HY2_PORT"]
-        item["password"] = vars_map["HY2_PASSWORD"]
-        tls = ensure(item, "tls", {})
-        tls["server_name"] = vars_map["HY2_SNI"]
-    elif proto == "ss":
-        item["server_port"] = vars_map["SS_PORT"]
-        item["method"] = vars_map["SS_METHOD"]
-        item["password"] = vars_map["SS_PASSWORD"]
-    elif proto == "trojan":
-        item["server_port"] = vars_map["TROJAN_PORT"]
-        item["password"] = vars_map["TROJAN_PASSWORD"]
-        tls = ensure(item, "tls", {})
-        tls["server_name"] = vars_map["TLS_SERVER_NAME"]
-    elif proto == "anytls":
-        item["server_port"] = vars_map["ANYTLS_PORT"]
-        item["password"] = vars_map["ANYTLS_PASSWORD"]
-        tls = ensure(item, "tls", {})
-        tls["server_name"] = vars_map["TLS_SERVER_NAME"]
-    elif proto == "vgr":
-        item["server_port"] = vars_map["VGR_PORT"]
-        item["uuid"] = vars_map["VGR_UUID"]
-        tls = ensure(item, "tls", {})
-        tls["server_name"] = vars_map["VGR_SERVER_NAME"]
-        reality = ensure(tls, "reality", {})
-        reality["public_key"] = vars_map["VGR_PUBLIC_KEY"]
-        reality["short_id"] = vars_map["VGR_SHORT_ID"]
-        transport = ensure(item, "transport", {})
-        transport["type"] = "grpc"
-        transport["service_name"] = vars_map["VGR_SERVICE_NAME"]
-    elif proto == "vbr":
-        item["server_port"] = vars_map["VBR_PORT"]
-        item["uuid"] = vars_map["VBR_UUID"]
-        tls = ensure(item, "tls", {})
-        tls["server_name"] = vars_map["VBR_SERVER_NAME"]
-        reality = ensure(tls, "reality", {})
-        reality["public_key"] = vars_map["VBR_PUBLIC_KEY"]
-        reality["short_id"] = vars_map["VBR_SHORT_ID"]
-        multiplex = ensure(item, "multiplex", {})
-        brutal = ensure(multiplex, "brutal", {})
-        brutal["enabled"] = True
-        brutal["up_mbps"] = 1000
-        brutal["down_mbps"] = 1000
-    return item
-
 result = []
-for item in data:
-    if not isinstance(item, dict):
-        continue
-    proto = proto_of(item)
-    if not proto:
-        continue
-    if not enabled.get(proto, False):
-        continue
-    result.append(apply_vars(proto, copy.deepcopy(item)))
-
+out_file = sys.argv[1]
+for path in sys.argv[2:]:
+    with open(path, "r", encoding="utf-8") as f:
+        data = json.load(f)
+    if isinstance(data, list):
+        result.extend(data)
+    else:
+        result.append(data)
 with open(out_file, "w", encoding="utf-8") as f:
     json.dump(result, f, ensure_ascii=False, indent=2)
 PY
@@ -910,64 +701,28 @@ prompt_export_destination_if_needed() {
 }
 
 post_install_client_export_prompt() {
-  interactive_mode || return 0
   collect_generated_client_snippets
   if (( ${#CLIENT_SB_SNIPPETS[@]} == 0 && ${#CLIENT_CLASH_SNIPPETS[@]} == 0 )); then
     warn '未发现可导出的客户端节点片段，跳过导出向导'
     return 0
   fi
 
-  local choice
-  while true; do
-    cat <<'EOF'
+  printf '\n========== 客户端节点 ==========\n'
+  if (( ${#CLIENT_SB_SNIPPETS[@]} > 0 )); then
+    show_client_snippets '以下为已完成协议对应的 sing-box 客户端片段：' "${CLIENT_SB_SNIPPETS[@]}"
+    export_singbox_nodes_to_root "/root"
+  else
+    warn '当前没有可导出的 sing-box 节点片段'
+  fi
 
-========== 客户端节点导出 ==========
-请选择要导出的客户端节点：
-  1) 生成 sing-box 节点（JSON）
-  2) 生成 clash/mihomo 节点（YAML）
-  3) 全部生成
-  0) 跳过
-EOF
-    read -r -p '输入编号 [0-3]: ' choice
-    choice="${choice:-0}"
-    case "$choice" in
-      1)
-        if (( ${#CLIENT_SB_SNIPPETS[@]} == 0 )); then
-          warn '当前没有可导出的 sing-box 节点片段'
-          continue
-        fi
-        show_client_snippets '以下为已完成协议对应的 sing-box 客户端片段：' "${CLIENT_SB_SNIPPETS[@]}"
-        export_singbox_nodes_to_root "/root"
-        return 0
-        ;;
-      2)
-        if (( ${#CLIENT_CLASH_SNIPPETS[@]} == 0 )); then
-          warn '当前没有可导出的 clash/mihomo 节点片段'
-          continue
-        fi
-        show_client_snippets '以下为已完成协议对应的 clash/mihomo 客户端片段：' "${CLIENT_CLASH_SNIPPETS[@]}"
-        export_clash_nodes_to_root "/root"
-        return 0
-        ;;
-      3)
-        if (( ${#CLIENT_SB_SNIPPETS[@]} > 0 )); then
-          show_client_snippets '以下为已完成协议对应的 sing-box 客户端片段：' "${CLIENT_SB_SNIPPETS[@]}"
-          export_singbox_nodes_to_root "/root"
-        else
-          warn '当前没有可导出的 sing-box 节点片段'
-        fi
-        if (( ${#CLIENT_CLASH_SNIPPETS[@]} > 0 )); then
-          show_client_snippets '以下为已完成协议对应的 clash/mihomo 客户端片段：' "${CLIENT_CLASH_SNIPPETS[@]}"
-          export_clash_nodes_to_root "/root"
-        else
-          warn '当前没有可导出的 clash/mihomo 节点片段'
-        fi
-        return 0
-        ;;
-      0) return 0 ;;
-      *) echo '[ERR] 请输入 0-3。' >&2 ;;
-    esac
-  done
+  if (( ${#CLIENT_CLASH_SNIPPETS[@]} > 0 )); then
+    show_client_snippets '以下为已完成协议对应的 clash/mihomo 客户端片段：' "${CLIENT_CLASH_SNIPPETS[@]}"
+    export_clash_nodes_to_root "/root"
+  else
+    warn '当前没有可导出的 clash/mihomo 节点片段'
+  fi
+
+  return 0
 }
 
 detect_vbr_environment() {
