@@ -359,6 +359,14 @@ collect_interactive_ports() {
   done
   (( ${#PORT_PROMPT_PROTOCOLS[@]} > 0 )) || return 0
   printf '本次仅收集以下协议所需端口：%s\n' "$(format_protocol_list "${PORT_PROMPT_PROTOCOLS[@]}")"
+  if ! interactive_mode; then
+    for proto in "${PORT_PROMPT_PROTOCOLS[@]}"; do
+      var="$(protocol_to_port_var "$proto")"
+      default_port="$(default_port_for_protocol "$proto")"
+      [[ -n "${!var:-}" ]] || printf -v "$var" '%s' "$default_port"
+    done
+    return 0
+  fi
   while true; do
     read -r -p '是否自定义上述协议端口？[y/N]: ' customize
     customize="${customize:-N}"

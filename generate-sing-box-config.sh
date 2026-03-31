@@ -431,7 +431,7 @@ ENABLED_PROTOCOLS=()
 
 if [[ "$ENABLE_HY2" == "true" ]]; then
   ENABLED_PROTOCOLS+=("hysteria2")
-  append_json_item INBOUNDS_JSON "    {\n      \"type\": \"hysteria2\",\n      \"tag\": \"hy2-in\",\n      \"listen\": \"$LISTEN\",\n      \"listen_port\": $HY2_PORT,\n      \"sniff\": true,\n      \"sniff_override_destination\": false,\n      \"users\": [\n        {\n          \"password\": \"$HY2_PASSWORD\"\n        }\n      ],\n      \"ignore_client_bandwidth\": true,\n      \"tls\": {\n        \"enabled\": true,\n        \"alpn\": [\"h3\"],\n        \"certificate_path\": \"$HY2_CERT_PATH\",\n        \"key_path\": \"$HY2_KEY_PATH\"\n      }\n    }"
+  append_json_item INBOUNDS_JSON "    {\n      \"type\": \"hysteria2\",\n      \"tag\": \"hy2-in\",\n      \"listen\": \"$LISTEN\",\n      \"listen_port\": $HY2_PORT,\n      \"users\": [\n        {\n          \"password\": \"$HY2_PASSWORD\"\n        }\n      ],\n      \"ignore_client_bandwidth\": true,\n      \"tls\": {\n        \"enabled\": true,\n        \"alpn\": [\"h3\"],\n        \"certificate_path\": \"$HY2_CERT_PATH\",\n        \"key_path\": \"$HY2_KEY_PATH\"\n      }\n    }"
   append_json_item PROTOCOLS_JSON "    \"hysteria2\": {\n      \"enabled\": true,\n      \"port\": $HY2_PORT,\n      \"password\": \"$HY2_PASSWORD\",\n      \"server_name\": \"$HY2_SNI\",\n      \"certificate_path\": \"$HY2_CERT_PATH\",\n      \"key_path\": \"$HY2_KEY_PATH\"\n    }"
   cat > "$HY2_SB_SNIPPET" <<EOF
 {
@@ -491,7 +491,7 @@ fi
 
 if [[ "$ENABLE_TROJAN" == "true" ]]; then
   ENABLED_PROTOCOLS+=("trojan")
-  append_json_item INBOUNDS_JSON "    {\n      \"type\": \"trojan\",\n      \"tag\": \"trojan-in\",\n      \"listen\": \"$LISTEN\",\n      \"listen_port\": $TROJAN_PORT,\n      \"tcp_fast_open\": true,\n      \"tcp_multi_path\": true,\n      \"sniff\": true,\n      \"users\": [\n        {\n          \"name\": \"$NAME\",\n          \"password\": \"$TROJAN_PASSWORD\"\n        }\n      ],\n      \"tls\": {\n        \"enabled\": true,\n        \"server_name\": \"$TROJAN_SERVER_NAME\",\n        \"certificate_path\": \"$TROJAN_CERT_PATH\",\n        \"key_path\": \"$TROJAN_KEY_PATH\"\n      },\n      \"multiplex\": {\n        \"enabled\": true,\n        \"padding\": false,\n        \"brutal\": {\n          \"enabled\": false,\n          \"up_mbps\": 55,\n          \"down_mbps\": 500\n        }\n      }\n    }"
+  append_json_item INBOUNDS_JSON "    {\n      \"type\": \"trojan\",\n      \"tag\": \"trojan-in\",\n      \"listen\": \"$LISTEN\",\n      \"listen_port\": $TROJAN_PORT,\n      \"tcp_fast_open\": true,\n      \"tcp_multi_path\": true,\n      \"users\": [\n        {\n          \"name\": \"$NAME\",\n          \"password\": \"$TROJAN_PASSWORD\"\n        }\n      ],\n      \"tls\": {\n        \"enabled\": true,\n        \"server_name\": \"$TROJAN_SERVER_NAME\",\n        \"certificate_path\": \"$TROJAN_CERT_PATH\",\n        \"key_path\": \"$TROJAN_KEY_PATH\"\n      },\n      \"multiplex\": {\n        \"enabled\": true,\n        \"padding\": false,\n        \"brutal\": {\n          \"enabled\": false,\n          \"up_mbps\": 55,\n          \"down_mbps\": 500\n        }\n      }\n    }"
   append_json_item PROTOCOLS_JSON "    \"trojan\": {\n      \"enabled\": true,\n      \"port\": $TROJAN_PORT,\n      \"password\": \"$TROJAN_PASSWORD\",\n      \"server_name\": \"$TROJAN_SERVER_NAME\",\n      \"certificate_path\": \"$TROJAN_CERT_PATH\",\n      \"key_path\": \"$TROJAN_KEY_PATH\"\n    }"
   cat > "$TROJAN_SB_SNIPPET" <<EOF
 {
