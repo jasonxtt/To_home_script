@@ -59,7 +59,7 @@ Additional protocols (server-side):
                                               Enable VLESS Brutal Reality inbound (default: disabled)
   --vless-brutal-reality-port <port>          VLESS Brutal Reality port (default: 55506)
   --vless-brutal-reality-uuid <uuid>          Explicit UUID (default: reuse VLESS gRPC Reality UUID)
-  --vless-brutal-reality-server-name <domain> Reality server_name / handshake host (default: reuse Trojan domain / --host)
+  --vless-brutal-reality-server-name <domain> Reality server_name / handshake host (default: www.huawei.com)
   --vless-brutal-reality-short-id <hex>       Explicit short-id (default: reuse VLESS gRPC Reality short-id)
   --vless-brutal-reality-up-mbps <num>        TCP Brutal upload Mbps (default: 1000)
   --vless-brutal-reality-down-mbps <num>      TCP Brutal download Mbps (default: 1000)
@@ -290,7 +290,7 @@ collect_interactive_protocol_selection() {
   3) VLESS gRPC Reality
   4) Trojan（需申请证书，仅支持域名挂靠 Cloudflare）
   5) AnyTLS（需申请证书，仅支持域名挂靠 Cloudflare）
-  6) VLESS Brutal Reality（需安装证书及 brutal，若安装失败该协议不可用）
+  6) VLESS Brutal Reality（需安装 brutal，若安装失败该协议不可用）
   7) 安装所有
 EOF
     read -r -p '输入编号（示例：1 / 1,2 / 1,2,3 / 7）: ' choice
@@ -1644,7 +1644,7 @@ ENABLE_HY2=true; ENABLE_HY2_SOURCE=default; HY2_PORT=55501; HY2_PASSWORD=''; HY2
 ENABLE_TROJAN=false; ENABLE_TROJAN_SOURCE=default; TROJAN_PORT=55503; TROJAN_PASSWORD=''
 ENABLE_ANYTLS=false; ENABLE_ANYTLS_SOURCE=default; ANYTLS_PORT=55504; ANYTLS_PASSWORD=''
 ENABLE_VGR=true; ENABLE_VGR_SOURCE=default; VGR_PORT=55505; VGR_UUID=''; VGR_SERVER_NAME='www.huawei.com'; VGR_SERVICE_NAME='Huawei.SmartHome.Connect'; VGR_SHORT_ID=''; VGR_PRIVATE_KEY=''; VGR_PUBLIC_KEY=''
-ENABLE_VBR=false; ENABLE_VBR_SOURCE=default; VBR_PORT=55506; VBR_UUID=''; VBR_SERVER_NAME=''; VBR_SHORT_ID=''; VBR_UP_MBPS=1000; VBR_DOWN_MBPS=1000
+ENABLE_VBR=false; ENABLE_VBR_SOURCE=default; VBR_PORT=55506; VBR_UUID=''; VBR_SERVER_NAME='www.huawei.com'; VBR_SHORT_ID=''; VBR_UP_MBPS=1000; VBR_DOWN_MBPS=1000
 ACME_DOMAIN=''; CF_KEY=''; CF_EMAIL=''; ACME_EMAIL=''
 BIN_DIR='/usr/local/bin'; CONFIG_DIR='/usr/local/etc/sing-box'; SERVICE_NAME='sing-box'; WORK_BASE='/tmp'; DOWNLOAD_URL=''; FORCE_DOWNLOAD=false; FORCE_BINARY_UPDATE=false; USER_ARTIFACT_DIR=''; USER_BACKUP_DIR=''; USER_ACME_HOME=''; USER_CERT_BASE_DIR=''
 VERBOSE_OUTPUT=false
@@ -1880,10 +1880,10 @@ fi
 if [[ "$ENABLE_VBR" == true ]]; then
   VBR_UUID="${VBR_UUID:-${VGR_UUID:-}}"
   VBR_SHORT_ID="${VBR_SHORT_ID:-${VGR_SHORT_ID:-}}"
-  VBR_SERVER_NAME="${VBR_SERVER_NAME:-${ACME_DOMAIN:-$HOST}}"
+  VBR_SERVER_NAME="${VBR_SERVER_NAME:-www.huawei.com}"
   prepare_vbr_or_skip
 else
-  VBR_SERVER_NAME="${VBR_SERVER_NAME:-${ACME_DOMAIN:-$HOST}}"
+  VBR_SERVER_NAME="${VBR_SERVER_NAME:-www.huawei.com}"
 fi
 
 GEN_ARGS=(

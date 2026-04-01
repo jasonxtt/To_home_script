@@ -52,7 +52,7 @@ Additional server protocols:
                                               Include VLESS Brutal Reality inbound (default: disabled)
   --vless-brutal-reality-port <port>          VLESS Brutal Reality listen port (default: 55506)
   --vless-brutal-reality-uuid <uuid>          Explicit UUID (default: reuse VLESS gRPC Reality UUID / shared access UUID)
-  --vless-brutal-reality-server-name <domain> Reality server_name / handshake host (default: reuse Trojan server_name or --host)
+  --vless-brutal-reality-server-name <domain> Reality server_name / handshake host (default: www.huawei.com)
   --vless-brutal-reality-private-key <key>    Reality private key (required if enabled)
   --vless-brutal-reality-public-key <key>     Reality public key for manifest / client snippets
   --vless-brutal-reality-short-id <hex>       Reality short-id (default: reuse VLESS gRPC Reality short-id or random 8-byte hex)
@@ -219,7 +219,7 @@ ENABLE_VLESS_BRUTAL_REALITY="false"
 VBR_PORT="55506"
 VBR_UUID=""
 GENERATED_VBR_UUID="false"
-VBR_SERVER_NAME=""
+VBR_SERVER_NAME="www.huawei.com"
 VBR_PRIVATE_KEY=""
 VBR_PUBLIC_KEY=""
 VBR_SHORT_ID=""
@@ -308,7 +308,7 @@ done
 
 TROJAN_SERVER_NAME="${TROJAN_SERVER_NAME:-$HOST}"
 ANYTLS_SERVER_NAME="${ANYTLS_SERVER_NAME:-$HOST}"
-VBR_SERVER_NAME="${VBR_SERVER_NAME:-$TROJAN_SERVER_NAME}"
+VBR_SERVER_NAME="${VBR_SERVER_NAME:-www.huawei.com}"
 
 NEED_SING_BOX="false"
 if [[ "$ENABLE_SS" == "true" && -z "$PASSWORD" ]]; then NEED_SING_BOX="true"; fi
@@ -496,7 +496,7 @@ if [[ "$ENABLE_TROJAN" == "true" ]]; then
   cat > "$TROJAN_SB_SNIPPET" <<EOF
 {
   "type": "trojan",
-  "tag": "trojan-in-jygg",
+  "tag": "$NAME-trojan",
   "server": "$HOST",
   "server_port": $TROJAN_PORT,
   "password": "$TROJAN_PASSWORD",
@@ -582,7 +582,7 @@ fi
 
 if [[ "$ENABLE_VLESS_GRPC_REALITY" == "true" ]]; then
   ENABLED_PROTOCOLS+=("vless-grpc-reality")
-  append_json_item INBOUNDS_JSON "    {\n      \"type\": \"vless\",\n      \"tag\": \"vless-grpc-reality-in\",\n      \"listen\": \"$LISTEN\",\n      \"listen_port\": $VGR_PORT,\n      \"users\": [\n        {\n          \"uuid\": \"$VGR_UUID\",\n          \"flow\": \"\"\n        }\n      ],\n      \"tls\": {\n        \"enabled\": true,\n        \"server_name\": \"$VGR_SERVER_NAME\",\n        \"reality\": {\n          \"enabled\": true,\n          \"handshake\": {\n            \"server\": \"$VGR_SERVER_NAME\",\n            \"server_port\": 443\n          },\n          \"private_key\": \"$VGR_PRIVATE_KEY\",\n          \"short_id\": [\"$VGR_SHORT_ID\"]\n        }\n      },\n      \"transport\": {\n        \"type\": \"grpc\",\n        \"service_name\": \"$VGR_SERVICE_NAME\"\n      }\n    }"
+  append_json_item INBOUNDS_JSON "    {\n      \"type\": \"vless\",\n      \"tag\": \"vless-grpc-reality-in\",\n      \"listen\": \"$LISTEN\",\n      \"listen_port\": $VGR_PORT,\n      \"users\": [\n        {\n          \"uuid\": \"$VGR_UUID\",\n          \"flow\": \"\"\n        }\n      ],\n      \"tls\": {\n        \"enabled\": true,\n        \"server_name\": \"www.huawei.com\",\n        \"reality\": {\n          \"enabled\": true,\n          \"handshake\": {\n            \"server\": \"www.huawei.com\",\n            \"server_port\": 443\n          },\n          \"private_key\": \"$VGR_PRIVATE_KEY\",\n          \"short_id\": [\"$VGR_SHORT_ID\"]\n        }\n      },\n      \"transport\": {\n        \"type\": \"grpc\",\n        \"service_name\": \"$VGR_SERVICE_NAME\"\n      }\n    }"
   append_json_item PROTOCOLS_JSON "    \"vless_grpc_reality\": {\n      \"enabled\": true,\n      \"port\": $VGR_PORT,\n      \"uuid\": \"$VGR_UUID\",\n      \"server_name\": \"$VGR_SERVER_NAME\",\n      \"service_name\": \"$VGR_SERVICE_NAME\",\n      \"private_key\": \"$VGR_PRIVATE_KEY\",\n      \"public_key\": \"$VGR_PUBLIC_KEY\",\n      \"short_id\": \"$VGR_SHORT_ID\"\n    }"
   cat > "$VGR_SB_SNIPPET" <<EOF
 {
@@ -593,16 +593,20 @@ if [[ "$ENABLE_VLESS_GRPC_REALITY" == "true" ]]; then
   "uuid": "$VGR_UUID",
   "tls": {
     "enabled": true,
-    "server_name": "$VGR_SERVER_NAME",
+    "server_name": "www.huawei.com",
     "reality": {
       "enabled": true,
       "public_key": "$VGR_PUBLIC_KEY",
       "short_id": "$VGR_SHORT_ID"
-    }
+    },
+      "utls": {
+        "enabled": true,
+        "fingerprint": "chrome"
+      }
   },
   "transport": {
     "type": "grpc",
-    "service_name": "$VGR_SERVICE_NAME"
+    "service_name": "Huawei.SmartHome.Connect"
   }
 }
 EOF
@@ -614,13 +618,13 @@ EOF
   uuid: $VGR_UUID
   tls: true
   udp: false
-  servername: $VGR_SERVER_NAME
+  servername: www.huawei.com
   network: grpc
   reality-opts:
     public-key: $VGR_PUBLIC_KEY
     short-id: $VGR_SHORT_ID
   grpc-opts:
-    grpc-service-name: $VGR_SERVICE_NAME
+    grpc-service-name: Huawei.SmartHome.Connect
   client-fingerprint: chrome
 EOF
   CLIENT_FILES+=("- client/vless-grpc-reality-singbox-outbound.json" "- client/vless-grpc-reality-mihomo-proxy.yaml")
@@ -628,7 +632,7 @@ fi
 
 if [[ "$ENABLE_VLESS_BRUTAL_REALITY" == "true" ]]; then
   ENABLED_PROTOCOLS+=("vless-brutal-reality")
-  append_json_item INBOUNDS_JSON "    {\n      \"type\": \"vless\",\n      \"tag\": \"vless-brutal-reality-in\",\n      \"listen\": \"$LISTEN\",\n      \"listen_port\": $VBR_PORT,\n      \"users\": [\n        {\n          \"uuid\": \"$VBR_UUID\",\n          \"flow\": \"\"\n        }\n      ],\n      \"tls\": {\n        \"enabled\": true,\n        \"server_name\": \"$VBR_SERVER_NAME\",\n        \"reality\": {\n          \"enabled\": true,\n          \"handshake\": {\n            \"server\": \"$VBR_SERVER_NAME\",\n            \"server_port\": 443\n          },\n          \"private_key\": \"$VBR_PRIVATE_KEY\",\n          \"short_id\": [\"$VBR_SHORT_ID\"]\n        }\n      },\n      \"multiplex\": {\n        \"enabled\": true,\n        \"padding\": false,\n        \"brutal\": {\n          \"enabled\": true,\n          \"up_mbps\": $VBR_UP_MBPS,\n          \"down_mbps\": $VBR_DOWN_MBPS\n        }\n      }\n    }"
+  append_json_item INBOUNDS_JSON "    {\n      \"type\": \"vless\",\n      \"tag\": \"vless-brutal-reality-in\",\n      \"listen\": \"$LISTEN\",\n      \"listen_port\": $VBR_PORT,\n      \"users\": [\n        {\n          \"uuid\": \"$VBR_UUID\",\n          \"flow\": \"\"\n        }\n      ],\n      \"tls\": {\n        \"enabled\": true,\n        \"server_name\": \"www.huawei.com\",\n        \"reality\": {\n          \"enabled\": true,\n          \"handshake\": {\n            \"server\": \"www.huawei.com\",\n            \"server_port\": 443\n          },\n          \"private_key\": \"$VBR_PRIVATE_KEY\",\n          \"short_id\": [\"$VBR_SHORT_ID\"]\n        }\n      },\n      \"multiplex\": {\n        \"enabled\": true,\n        \"padding\": false,\n        \"brutal\": {\n          \"enabled\": true,\n          \"up_mbps\": $VBR_UP_MBPS,\n          \"down_mbps\": $VBR_DOWN_MBPS\n        }\n      }\n    }"
   append_json_item PROTOCOLS_JSON "    \"vless_brutal_reality\": {\n      \"enabled\": true,\n      \"port\": $VBR_PORT,\n      \"uuid\": \"$VBR_UUID\",\n      \"server_name\": \"$VBR_SERVER_NAME\",\n      \"private_key\": \"$VBR_PRIVATE_KEY\",\n      \"public_key\": \"$VBR_PUBLIC_KEY\",\n      \"short_id\": \"$VBR_SHORT_ID\",\n      \"up_mbps\": $VBR_UP_MBPS,\n      \"down_mbps\": $VBR_DOWN_MBPS,\n      \"shared_with_vless_grpc_reality\": $([[ -n "$VGR_UUID" && "$VBR_UUID" == "$VGR_UUID" && -n "$VGR_SHORT_ID" && "$VBR_SHORT_ID" == "$VGR_SHORT_ID" ]] && echo true || echo false)
     }"
   cat > "$VBR_SB_SNIPPET" <<EOF
@@ -638,9 +642,15 @@ if [[ "$ENABLE_VLESS_BRUTAL_REALITY" == "true" ]]; then
   "server": "$HOST",
   "server_port": $VBR_PORT,
   "uuid": "$VBR_UUID",
+  "flow": "",
+  "packet_encoding": "xudp",
   "tls": {
     "enabled": true,
     "server_name": "$VBR_SERVER_NAME",
+    "utls": {
+      "enabled": true,
+      "fingerprint": "chrome"
+    },
     "reality": {
       "enabled": true,
       "public_key": "$VBR_PUBLIC_KEY",
@@ -649,8 +659,10 @@ if [[ "$ENABLE_VLESS_BRUTAL_REALITY" == "true" ]]; then
   },
   "multiplex": {
     "enabled": true,
-    "protocol": "smux",
-    "padding": false,
+    "protocol": "h2mux",
+    "max_connections": 1,
+    "min_streams": 4,
+    "padding": true,
     "brutal": {
       "enabled": true,
       "up_mbps": $VBR_UP_MBPS,
