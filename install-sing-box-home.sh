@@ -327,6 +327,204 @@ EOF
   done
 }
 
+protocol_number() {
+  case "$1" in
+    hy2) echo 1 ;;
+    ss) echo 2 ;;
+    vgr) echo 3 ;;
+    trojan) echo 4 ;;
+    anytls) echo 5 ;;
+    vbr) echo 6 ;;
+    *) return 1 ;;
+  esac
+}
+
+print_protocols_numbered() {
+  local include_port="$1"
+  shift || true
+  local proto port
+  for proto in "$@"; do
+    printf '  %s) %s' "$(protocol_number "$proto")" "$(protocol_label "$proto")"
+    if [[ "$include_port" == true ]]; then
+      port="${CURRENT_PROTOCOL_PORTS[$proto]:-$(get_protocol_port "$proto" 2>/dev/null || true)}"
+      [[ -n "$port" ]] && printf ' (%s)' "$port"
+    fi
+    printf '\n'
+  done
+}
+
+parse_protocol_selection_list() {
+  local raw="$1"
+  shift || true
+  local allowed=("$@") item proto
+  PARSED_PROTOCOLS=()
+  raw="${raw// /}"
+  [[ -n "$raw" ]] || return 1
+  IFS=',' read -r -a items <<< "$raw"
+  for item in "${items[@]}"; do
+    case "$item" in
+      1) proto=hy2 ;;
+      2) proto=ss ;;
+      3) proto=vgr ;;
+      4) proto=trojan ;;
+      5) proto=anytls ;;
+      6) proto=vbr ;;
+      *) return 1 ;;
+    esac
+    array_contains "$proto" "${allowed[@]}" || return 1
+    array_contains "$proto" "${PARSED_PROTOCOLS[@]}" || PARSED_PROTOCOLS+=("$proto")
+  done
+  (( ${#PARSED_PROTOCOLS[@]} > 0 ))
+}
+
+protocol_action_label() {
+  case "$1" in
+    add) echo '新增协议' ;;
+    reset) echo '重置已有协议' ;;
+    delete) echo '删除已有协议' ;;
+    *) echo "$1" ;;
+  esac
+}
+
+show_protocol_change_plan() {
+  local action="$1"
+  shift || true
+  local proto
+  printf '本次变更计划：\n'
+  printf '  - 操作类型：%s\n' "$(protocol_action_label "$action")"
+  printf '  - 目标协议：\n'
+  for proto in "$@"; do
+    printf '    %s) %s\n' "$(protocol_number "$proto")" "$(protocol_label "$proto")"
+  done
+  case "$action" in
+    reset) printf '  - 说明：将重新生成所选协议的配置与凭据\n' ;;
+    delete) printf '  - 说明：将从当前配置中移除所选协议对应的 inbound\n' ;;
+  esac
+}
+
+apply_protocol_action_selection() {
+  local action="$1"
+  shift || true
+  local selected=("$@") proto
+
+  ADD_PROTOCOLS=()
+  RESET_PROTOCOLS=()
+  DELETE_PROTOCOLS=()
+  TARGET_PROTOCOLS=()
+
+  for proto in "${PROTOCOL_KEYS[@]}"; do
+    if array_contains "$proto" "${CURRENT_PROTOCOLS[@]}"; then
+      set_protocol_state "$proto" true
+    else
+      set_protocol_state "$proto" false
+    fi
+  done
+
+  case "$action" in
+    add)
+      ADD_PROTOCOLS=("${selected[@]}")
+      for proto in "${selected[@]}"; do
+        set_protocol_state "$proto" true
+      done
+      ;;
+    reset)
+      RESET_PROTOCOLS=("${selected[@]}")
+      ;;
+    delete)
+      DELETE_PROTOCOLS=("${selected[@]}")
+      for proto in "${selected[@]}"; do
+        set_protocol_state "$proto" false
+      done
+      ;;
+    *)
+      die "Unknown protocol action: $action"
+      ;;
+  esac
+
+  for proto in "${PROTOCOL_KEYS[@]}"; do
+    [[ "$(get_protocol_state "$proto")" == true ]] && TARGET_PROTOCOLS+=("$proto")
+  done
+  if (( ${#TARGET_PROTOCOLS[@]} == 0 )); then
+    die '不能删除全部协议；如需全部移除，请使用卸载功能'
+  fi
+}
+
+collect_interactive_existing_protocol_action() {
+  local action choice confirm confirm_delete
+  local available=()
+  local selected=()
+
+  while true; do
+    printf '已检测到的协议：\n'
+    print_protocols_numbered true "${CURRENT_PROTOCOLS[@]}"
+
+    cat <<'EOF'
+请选择本次操作：
+  1) 新增协议
+  2) 重置已有协议
+  3) 删除已有协议
+EOF
+    read -r -p '输入编号 [1-3]: ' action
+    action="${action:-1}"
+    case "$action" in
+      1)
+        PROTOCOL_ACTION_MODE=add
+        available=()
+        for choice in "${PROTOCOL_KEYS[@]}"; do
+          array_contains "$choice" "${CURRENT_PROTOCOLS[@]}" || available+=("$choice")
+        done
+        (( ${#available[@]} > 0 )) || { echo '[ERR] 当前没有可新增的协议。' >&2; continue; }
+        printf '可新增协议：\n'
+        print_protocols_numbered false "${available[@]}"
+        read -r -p '请输入要新增的协议编号（示例：3 / 3,4）: ' choice
+        parse_protocol_selection_list "$choice" "${available[@]}" || { echo '[ERR] 请输入可新增协议对应的编号组合。' >&2; continue; }
+        selected=("${PARSED_PROTOCOLS[@]}")
+        ;;
+      2)
+        PROTOCOL_ACTION_MODE=reset
+        available=("${CURRENT_PROTOCOLS[@]}")
+        (( ${#available[@]} > 0 )) || { echo '[ERR] 当前没有可重置的协议。' >&2; continue; }
+        printf '可重置协议：\n'
+        print_protocols_numbered false "${available[@]}"
+        read -r -p '请输入要重置的协议编号（示例：1 / 1,3）: ' choice
+        parse_protocol_selection_list "$choice" "${available[@]}" || { echo '[ERR] 请输入可重置协议对应的编号组合。' >&2; continue; }
+        selected=("${PARSED_PROTOCOLS[@]}")
+        ;;
+      3)
+        PROTOCOL_ACTION_MODE=delete
+        available=("${CURRENT_PROTOCOLS[@]}")
+        (( ${#available[@]} > 0 )) || { echo '[ERR] 当前没有可删除的协议。' >&2; continue; }
+        printf '可删除协议：\n'
+        print_protocols_numbered false "${available[@]}"
+        read -r -p '请输入要删除的协议编号（示例：2 / 2,3）: ' choice
+        parse_protocol_selection_list "$choice" "${available[@]}" || { echo '[ERR] 请输入可删除协议对应的编号组合。' >&2; continue; }
+        selected=("${PARSED_PROTOCOLS[@]}")
+        ;;
+      *)
+        echo '[ERR] 请输入 1-3。' >&2
+        continue
+        ;;
+    esac
+
+    apply_protocol_action_selection "$PROTOCOL_ACTION_MODE" "${selected[@]}"
+    show_protocol_change_plan "$PROTOCOL_ACTION_MODE" "${selected[@]}"
+    read -r -p '确认继续？[Y/n]: ' confirm
+    confirm="${confirm:-Y}"
+    case "$confirm" in
+      n|N|no|NO) continue ;;
+    esac
+    if [[ "$PROTOCOL_ACTION_MODE" == delete ]]; then
+      read -r -p '再次确认：即将删除所选协议，是否继续？[y/N]: ' confirm_delete
+      case "${confirm_delete:-N}" in
+        y|Y|yes|YES) ;;
+        *) continue ;;
+      esac
+    fi
+    INTERACTIVE_PROTOCOL_ACTION_SELECTED=true
+    return 0
+  done
+}
+
 set_protocol_default_port() {
   case "$1" in
     hy2) HY2_PORT=55501 ;;
@@ -429,51 +627,126 @@ generate_hy2_cert_if_needed() {
   ln -sf "$HY2_CERT_PEM" "$HY2_CERT_CRT"
 }
 
-load_or_generate_vgr_credentials() {
-  mkdir -p "$CREDENTIALS_DIR"
-  if [[ -f "$VGR_ENV_FILE" ]]; then
-    # shellcheck disable=SC1090
-    source "$VGR_ENV_FILE"
-    log "Loaded existing VLESS Reality credentials from $VGR_ENV_FILE"
-  fi
-  local generated_any=false kp_out
-  if [[ -z "${VGR_PRIVATE_KEY:-}" || -z "${VGR_PUBLIC_KEY:-}" ]]; then
-    kp_out="$($TARGET_BIN generate reality-keypair)"
-    VGR_PRIVATE_KEY="$(printf '%s\n' "$kp_out" | awk '/^PrivateKey: / {print $2}')"
-    VGR_PUBLIC_KEY="$(printf '%s\n' "$kp_out" | awk '/^PublicKey: / {print $2}')"
-    generated_any=true
-  fi
-  if [[ -z "${VGR_UUID:-}" ]]; then VGR_UUID="$($TARGET_BIN generate uuid | tr -d '\r\n')"; generated_any=true; fi
-  if [[ -z "${VGR_SHORT_ID:-}" ]]; then VGR_SHORT_ID="$($TARGET_BIN generate rand 8 --hex | tr -d '\r\n')"; generated_any=true; fi
-  cat > "$VGR_ENV_FILE" <<EOF
-VGR_PRIVATE_KEY=$VGR_PRIVATE_KEY
-VGR_PUBLIC_KEY=$VGR_PUBLIC_KEY
-VGR_UUID=$VGR_UUID
-VGR_SHORT_ID=$VGR_SHORT_ID
-EOF
-  if [[ "$generated_any" == true ]]; then
-    log "Generated/updated VLESS Reality credentials at $VGR_ENV_FILE"
-  fi
+reality_protocols_selected_together() {
+  array_contains vgr "${ADD_PROTOCOLS[@]}" "${RESET_PROTOCOLS[@]}" && array_contains vbr "${ADD_PROTOCOLS[@]}" "${RESET_PROTOCOLS[@]}"
 }
 
-load_or_generate_shared_secrets() {
-  mkdir -p "$CREDENTIALS_DIR"
-  if [[ -f "$SHARED_SECRET_ENV_FILE" ]]; then
-    # shellcheck disable=SC1090
-    source "$SHARED_SECRET_ENV_FILE"
-    log "Loaded existing shared secrets from $SHARED_SECRET_ENV_FILE"
-  fi
-  local generated_any=false
-  if [[ -z "${ACCESS_UUID:-}" ]]; then ACCESS_UUID="${VGR_UUID:-$($TARGET_BIN generate uuid | tr -d '\r\n')}"; generated_any=true; fi
-  if [[ -z "${TROJAN_PASSWORD:-}" ]]; then TROJAN_PASSWORD="$ACCESS_UUID"; generated_any=true; fi
-  if [[ -z "${ANYTLS_PASSWORD:-}" ]]; then ANYTLS_PASSWORD="$ACCESS_UUID"; generated_any=true; fi
-  cat > "$SHARED_SECRET_ENV_FILE" <<EOF
-ACCESS_UUID=$ACCESS_UUID
-TROJAN_PASSWORD=$TROJAN_PASSWORD
-ANYTLS_PASSWORD=$ANYTLS_PASSWORD
+load_reality_env_file_if_exists() {
+  local env_file="$1"
+  [[ -f "$env_file" ]] || return 0
+  # shellcheck disable=SC1090
+  source "$env_file"
+}
+
+write_reality_env_file() {
+  local env_file="$1" prefix="$2"
+  local private_var="${prefix}_PRIVATE_KEY" public_var="${prefix}_PUBLIC_KEY" uuid_var="${prefix}_UUID" short_id_var="${prefix}_SHORT_ID"
+  cat > "$env_file" <<EOF
+${prefix}_PRIVATE_KEY=${!private_var}
+${prefix}_PUBLIC_KEY=${!public_var}
+${prefix}_UUID=${!uuid_var}
+${prefix}_SHORT_ID=${!short_id_var}
 EOF
-  if [[ "$generated_any" == true ]]; then
-    log "Generated/updated shared access secrets at $SHARED_SECRET_ENV_FILE"
+}
+
+generate_reality_credentials_into_prefix() {
+  local prefix="$1" kp_out private_key public_key uuid short_id
+  kp_out="$($TARGET_BIN generate reality-keypair)"
+  private_key="$(printf '%s\n' "$kp_out" | awk '/^PrivateKey: / {print $2}')"
+  public_key="$(printf '%s\n' "$kp_out" | awk '/^PublicKey: / {print $2}')"
+  uuid="$($TARGET_BIN generate uuid | tr -d '\r\n')"
+  short_id="$($TARGET_BIN generate rand 8 --hex | tr -d '\r\n')"
+  printf -v "${prefix}_PRIVATE_KEY" '%s' "$private_key"
+  printf -v "${prefix}_PUBLIC_KEY" '%s' "$public_key"
+  printf -v "${prefix}_UUID" '%s' "$uuid"
+  printf -v "${prefix}_SHORT_ID" '%s' "$short_id"
+}
+
+prepare_reality_credentials() {
+  local vgr_selected=false vbr_selected=false
+  local old_vgr_private='' old_vgr_public=''
+  mkdir -p "$CREDENTIALS_DIR"
+  load_reality_env_file_if_exists "$VGR_ENV_FILE"
+  load_reality_env_file_if_exists "$VBR_ENV_FILE"
+  old_vgr_private="${VGR_PRIVATE_KEY:-}"
+  old_vgr_public="${VGR_PUBLIC_KEY:-}"
+  array_contains vgr "${ADD_PROTOCOLS[@]}" "${RESET_PROTOCOLS[@]}" && vgr_selected=true || true
+  array_contains vbr "${ADD_PROTOCOLS[@]}" "${RESET_PROTOCOLS[@]}" && vbr_selected=true || true
+
+  if [[ "$vgr_selected" == true ]]; then
+    VGR_PRIVATE_KEY=''; VGR_PUBLIC_KEY=''; VGR_UUID=''; VGR_SHORT_ID=''
+  fi
+  if [[ "$vbr_selected" == true ]]; then
+    VBR_PRIVATE_KEY=''; VBR_PUBLIC_KEY=''; VBR_UUID=''; VBR_SHORT_ID=''
+  fi
+
+  if [[ -n "${VBR_PRIVATE_KEY:-}" && -z "${VBR_PUBLIC_KEY:-}" && -n "$old_vgr_private" && -n "$old_vgr_public" && "$VBR_PRIVATE_KEY" == "$old_vgr_private" ]]; then
+    VBR_PUBLIC_KEY="$old_vgr_public"
+  fi
+
+  if reality_protocols_selected_together && [[ "$ENABLE_VGR" == true && "$ENABLE_VBR" == true ]]; then
+    generate_reality_credentials_into_prefix VGR
+    VBR_PRIVATE_KEY="$VGR_PRIVATE_KEY"
+    VBR_PUBLIC_KEY="$VGR_PUBLIC_KEY"
+    VBR_UUID="$VGR_UUID"
+    VBR_SHORT_ID="$VGR_SHORT_ID"
+    log "Generated shared VLESS Reality credentials for current operation: $VGR_ENV_FILE and $VBR_ENV_FILE"
+  else
+    if [[ "$ENABLE_VGR" == true && "$vgr_selected" == true && ( -z "${VGR_PRIVATE_KEY:-}" || -z "${VGR_PUBLIC_KEY:-}" || -z "${VGR_UUID:-}" || -z "${VGR_SHORT_ID:-}" ) ]]; then
+      generate_reality_credentials_into_prefix VGR
+      log "Generated dedicated VLESS gRPC Reality credentials at $VGR_ENV_FILE"
+    fi
+    if [[ "$ENABLE_VBR" == true && "$vbr_selected" == true && ( -z "${VBR_PRIVATE_KEY:-}" || -z "${VBR_PUBLIC_KEY:-}" || -z "${VBR_UUID:-}" || -z "${VBR_SHORT_ID:-}" ) ]]; then
+      generate_reality_credentials_into_prefix VBR
+      log "Generated dedicated VLESS Brutal Reality credentials at $VBR_ENV_FILE"
+    fi
+  fi
+
+  if [[ "$ENABLE_VGR" == true && ( -z "${VGR_PRIVATE_KEY:-}" || -z "${VGR_PUBLIC_KEY:-}" || -z "${VGR_UUID:-}" || -z "${VGR_SHORT_ID:-}" ) ]]; then
+    die '缺少现有 VLESS gRPC Reality 凭据；请改为重置该协议后再继续'
+  fi
+  if [[ "$ENABLE_VBR" == true && ( -z "${VBR_PRIVATE_KEY:-}" || -z "${VBR_PUBLIC_KEY:-}" || -z "${VBR_UUID:-}" || -z "${VBR_SHORT_ID:-}" ) ]]; then
+    die '缺少现有 VLESS Brutal Reality 凭据；请改为重置该协议后再继续'
+  fi
+
+  if [[ "$ENABLE_VGR" == true ]]; then
+    write_reality_env_file "$VGR_ENV_FILE" VGR
+  fi
+  if [[ "$ENABLE_VBR" == true ]]; then
+    write_reality_env_file "$VBR_ENV_FILE" VBR
+  fi
+  return 0
+}
+
+prepare_trojan_anytls_passwords() {
+  local trojan_selected=false anytls_selected=false shared_secret=''
+  array_contains trojan "${ADD_PROTOCOLS[@]}" "${RESET_PROTOCOLS[@]}" && trojan_selected=true || true
+  array_contains anytls "${ADD_PROTOCOLS[@]}" "${RESET_PROTOCOLS[@]}" && anytls_selected=true || true
+
+  if [[ "$trojan_selected" == true && "$anytls_selected" == true && "$ENABLE_TROJAN" == true && "$ENABLE_ANYTLS" == true ]]; then
+    shared_secret="$($TARGET_BIN generate uuid | tr -d '\r\n')"
+    TROJAN_PASSWORD="$shared_secret"
+    ANYTLS_PASSWORD="$shared_secret"
+    ACCESS_UUID="$shared_secret"
+    return 0
+  fi
+
+  if [[ "$ENABLE_TROJAN" == true && "$trojan_selected" == true && -z "${TROJAN_PASSWORD:-}" ]]; then
+    TROJAN_PASSWORD="$($TARGET_BIN generate uuid | tr -d '\r\n')"
+  fi
+  if [[ "$ENABLE_ANYTLS" == true && "$anytls_selected" == true && -z "${ANYTLS_PASSWORD:-}" ]]; then
+    ANYTLS_PASSWORD="$($TARGET_BIN generate uuid | tr -d '\r\n')"
+  fi
+  if [[ "$ENABLE_TROJAN" == true && -z "${TROJAN_PASSWORD:-}" ]]; then
+    die '缺少现有 Trojan 密码；请改为重置该协议后再继续'
+  fi
+  if [[ "$ENABLE_ANYTLS" == true && -z "${ANYTLS_PASSWORD:-}" ]]; then
+    die '缺少现有 AnyTLS 密码；请改为重置该协议后再继续'
+  fi
+  if [[ -n "${TROJAN_PASSWORD:-}" && "${TROJAN_PASSWORD:-}" == "${ANYTLS_PASSWORD:-}" ]]; then
+    ACCESS_UUID="$TROJAN_PASSWORD"
+  else
+    ACCESS_UUID=''
   fi
   return 0
 }
@@ -862,6 +1135,78 @@ PY2
   done <<< "$parsed"
 }
 apply_existing_protocol_ports() { local proto var; for proto in "${CURRENT_PROTOCOLS[@]}"; do [[ -n "${CURRENT_PROTOCOL_PORTS[$proto]:-}" ]] || continue; var="$(protocol_to_port_var "$proto")"; printf -v "$var" '%s' "${CURRENT_PROTOCOL_PORTS[$proto]}"; done; }
+load_existing_protocol_runtime_values() {
+  local parsed kind value1 value2
+  [[ "$DEPLOY_MODE" == "standalone" ]] || return 0
+  [[ -f "$TARGET_CONFIG" ]] || return 0
+  parsed="$(python3 - "$TARGET_CONFIG" <<'PY2'
+import json, sys
+path = sys.argv[1]
+try:
+    data = json.load(open(path, encoding='utf-8'))
+except Exception:
+    raise SystemExit(0)
+if not isinstance(data, dict):
+    raise SystemExit(0)
+for ib in data.get('inbounds', []):
+    if not isinstance(ib, dict):
+        continue
+    tag = ib.get('tag', '')
+    typ = ib.get('type', '')
+    users = ib.get('users', [])
+    user0 = users[0] if isinstance(users, list) and users and isinstance(users[0], dict) else {}
+    tls = ib.get('tls', {}) if isinstance(ib.get('tls'), dict) else {}
+    reality = tls.get('reality', {}) if isinstance(tls.get('reality'), dict) else {}
+    transport = ib.get('transport', {}) if isinstance(ib.get('transport'), dict) else {}
+    short_id = reality.get('short_id')
+    short_id_0 = ''
+    if isinstance(short_id, list) and short_id:
+        short_id_0 = short_id[0]
+    elif isinstance(short_id, str):
+        short_id_0 = short_id
+    if typ == 'hysteria2' or tag == 'hy2-in':
+        if user0.get('password'): print('HY2_PASSWORD\t' + str(user0.get('password')))
+        if tls.get('server_name'): print('HY2_SNI\t' + str(tls.get('server_name')))
+    elif typ == 'shadowsocks' or tag == 'shadowsocks-in':
+        if ib.get('password'): print('SS_PASSWORD\t' + str(ib.get('password')))
+        if ib.get('method'): print('SS_METHOD\t' + str(ib.get('method')))
+    elif typ == 'trojan' or tag == 'trojan-in':
+        if user0.get('password'): print('TROJAN_PASSWORD\t' + str(user0.get('password')))
+    elif typ == 'anytls' or tag == 'anytls-in':
+        if user0.get('password'): print('ANYTLS_PASSWORD\t' + str(user0.get('password')))
+    elif tag == 'vless-grpc-reality-in':
+        if user0.get('uuid'): print('VGR_UUID\t' + str(user0.get('uuid')))
+        if tls.get('server_name'): print('VGR_SERVER_NAME\t' + str(tls.get('server_name')))
+        if transport.get('service_name'): print('VGR_SERVICE_NAME\t' + str(transport.get('service_name')))
+        if reality.get('private_key'): print('VGR_PRIVATE_KEY\t' + str(reality.get('private_key')))
+        if short_id_0: print('VGR_SHORT_ID\t' + str(short_id_0))
+    elif tag == 'vless-brutal-reality-in':
+        if user0.get('uuid'): print('VBR_UUID\t' + str(user0.get('uuid')))
+        if tls.get('server_name'): print('VBR_SERVER_NAME\t' + str(tls.get('server_name')))
+        if reality.get('private_key'): print('VBR_PRIVATE_KEY\t' + str(reality.get('private_key')))
+        if short_id_0: print('VBR_SHORT_ID\t' + str(short_id_0))
+PY2
+)"
+  while IFS=$'\t' read -r kind value1 value2; do
+    case "$kind" in
+      HY2_PASSWORD) [[ -n "$HY2_PASSWORD" ]] || HY2_PASSWORD="$value1" ;;
+      HY2_SNI) [[ "$HY2_SNI" != "bing.com" ]] || HY2_SNI="$value1" ;;
+      SS_PASSWORD) [[ -n "$PASSWORD" ]] || PASSWORD="$value1" ;;
+      SS_METHOD) [[ "$METHOD" != "2022-blake3-aes-128-gcm" ]] || METHOD="$value1" ;;
+      TROJAN_PASSWORD) [[ -n "$TROJAN_PASSWORD" ]] || TROJAN_PASSWORD="$value1" ;;
+      ANYTLS_PASSWORD) [[ -n "$ANYTLS_PASSWORD" ]] || ANYTLS_PASSWORD="$value1" ;;
+      VGR_UUID) [[ -n "$VGR_UUID" ]] || VGR_UUID="$value1" ;;
+      VGR_SERVER_NAME) [[ "$VGR_SERVER_NAME" != "www.huawei.com" ]] || VGR_SERVER_NAME="$value1" ;;
+      VGR_SERVICE_NAME) [[ "$VGR_SERVICE_NAME" != "Huawei.SmartHome.Connect" ]] || VGR_SERVICE_NAME="$value1" ;;
+      VGR_PRIVATE_KEY) [[ -n "$VGR_PRIVATE_KEY" ]] || VGR_PRIVATE_KEY="$value1" ;;
+      VGR_SHORT_ID) [[ -n "$VGR_SHORT_ID" ]] || VGR_SHORT_ID="$value1" ;;
+      VBR_UUID) [[ -n "$VBR_UUID" ]] || VBR_UUID="$value1" ;;
+      VBR_SERVER_NAME) [[ "$VBR_SERVER_NAME" != "www.huawei.com" ]] || VBR_SERVER_NAME="$value1" ;;
+      VBR_PRIVATE_KEY) [[ -n "$VBR_PRIVATE_KEY" ]] || VBR_PRIVATE_KEY="$value1" ;;
+      VBR_SHORT_ID) [[ -n "$VBR_SHORT_ID" ]] || VBR_SHORT_ID="$value1" ;;
+    esac
+  done <<< "$parsed"
+}
 apply_incremental_protocol_plan() { local proto; KEEP_PROTOCOLS=(); ADD_PROTOCOLS=(); EXISTING_NOT_SELECTED_PROTOCOLS=(); TARGET_PROTOCOLS=(); RESET_PROTOCOLS=(); for proto in "${PROTOCOL_KEYS[@]}"; do if array_contains "$proto" "${CURRENT_PROTOCOLS[@]}"; then TARGET_PROTOCOLS+=("$proto"); if [[ "$(get_protocol_state "$proto")" == true ]]; then KEEP_PROTOCOLS+=("$proto"); else EXISTING_NOT_SELECTED_PROTOCOLS+=("$proto"); set_protocol_state "$proto" true; fi; elif [[ "$(get_protocol_state "$proto")" == true ]]; then ADD_PROTOCOLS+=("$proto"); TARGET_PROTOCOLS+=("$proto"); fi; done; }
 format_protocol_list() { local proto items=(); for proto in "$@"; do items+=("$(protocol_label "$proto")"); done; if (( ${#items[@]} == 0 )); then printf '无'; else join_by ', ' "${items[@]}"; fi; }
 show_environment_status() {
@@ -1631,7 +1976,7 @@ purge_existing_acme_materials_if_needed() {
   rm -f "$ACME_META_FILE"
   remove_acme_domain_artifacts "$old_domain"
 }
-reset_protocol_credentials_if_needed() { local proto; for proto in "${RESET_PROTOCOLS[@]}"; do case "$proto" in hy2) HY2_PASSWORD='' ;; ss) PASSWORD='' ;; trojan) TROJAN_PASSWORD='' ; ACCESS_UUID='' ;; anytls) ANYTLS_PASSWORD='' ; ACCESS_UUID='' ;; vgr) VGR_UUID='' ; VGR_SHORT_ID='' ; VGR_PRIVATE_KEY='' ; VGR_PUBLIC_KEY='' ; ACCESS_UUID='' ;; vbr) VBR_UUID='' ; VBR_SHORT_ID='' ;; esac; done; }
+reset_protocol_credentials_if_needed() { local proto; for proto in "${RESET_PROTOCOLS[@]}"; do case "$proto" in hy2) HY2_PASSWORD='' ;; ss) PASSWORD='' ;; trojan) TROJAN_PASSWORD='' ; ACCESS_UUID='' ;; anytls) ANYTLS_PASSWORD='' ; ACCESS_UUID='' ;; vgr) VGR_UUID='' ; VGR_SHORT_ID='' ; VGR_PRIVATE_KEY='' ; VGR_PUBLIC_KEY='' ;; vbr) VBR_UUID='' ; VBR_SHORT_ID='' ; VBR_PRIVATE_KEY='' ; VBR_PUBLIC_KEY='' ;; esac; done; }
 write_installer_state() { local tmp="$WORK_ROOT/installer-state.json" proto first key value pair; mkdir -p "$(dirname "$INSTALLER_STATE_FILE")"; { printf '{\n  "script_version": "%s",\n  "deployed_at": "%s",\n  "enabled_protocols": [' "$INSTALLER_STATE_VERSION" "$(date -Iseconds)"; first=true; for proto in "${TARGET_PROTOCOLS[@]}"; do [[ "$first" == true ]] && first=false || printf ', '; printf '"%s"' "$proto"; done; printf '],\n  "ports": {'; first=true; for proto in "${TARGET_PROTOCOLS[@]}"; do [[ "$first" == true ]] && first=false || printf ', '; printf '"%s": %s' "$proto" "$(get_protocol_port "$proto")"; done; printf '},\n  "shared_credentials": {'; first=true; for pair in "access_uuid:${ACCESS_UUID:-}" "vless_uuid:${VGR_UUID:-}" "reality_short_id:${VGR_SHORT_ID:-}" "reality_public_key:${VGR_PUBLIC_KEY:-}"; do key="${pair%%:*}"; value="${pair#*:}"; [[ -n "$value" ]] || continue; [[ "$first" == true ]] && first=false || printf ', '; printf '"%s": "%s"' "$key" "$value"; done; printf '},\n  "paths": {'; first=true; for pair in "hy2_key:$HY2_KEY_FILE" "hy2_cert:$HY2_CERT_PEM" "default_tls_cert:$TROJAN_CERT_FILE" "default_tls_key:$TROJAN_KEY_FILE" "shared_secret_env:$SHARED_SECRET_ENV_FILE" "vgr_env:$VGR_ENV_FILE"; do key="${pair%%:*}"; value="${pair#*:}"; [[ "$first" == true ]] && first=false || printf ', '; printf '"%s": "%s"' "$key" "$value"; done; printf '}\n}\n'; } > "$tmp"; install -m 0644 "$tmp" "$INSTALLER_STATE_FILE"; }
 
 HOST=""
@@ -1644,7 +1989,7 @@ ENABLE_HY2=true; ENABLE_HY2_SOURCE=default; HY2_PORT=55501; HY2_PASSWORD=''; HY2
 ENABLE_TROJAN=false; ENABLE_TROJAN_SOURCE=default; TROJAN_PORT=55503; TROJAN_PASSWORD=''
 ENABLE_ANYTLS=false; ENABLE_ANYTLS_SOURCE=default; ANYTLS_PORT=55504; ANYTLS_PASSWORD=''
 ENABLE_VGR=true; ENABLE_VGR_SOURCE=default; VGR_PORT=55505; VGR_UUID=''; VGR_SERVER_NAME='www.huawei.com'; VGR_SERVICE_NAME='Huawei.SmartHome.Connect'; VGR_SHORT_ID=''; VGR_PRIVATE_KEY=''; VGR_PUBLIC_KEY=''
-ENABLE_VBR=false; ENABLE_VBR_SOURCE=default; VBR_PORT=55506; VBR_UUID=''; VBR_SERVER_NAME='www.huawei.com'; VBR_SHORT_ID=''; VBR_UP_MBPS=1000; VBR_DOWN_MBPS=1000
+ENABLE_VBR=false; ENABLE_VBR_SOURCE=default; VBR_PORT=55506; VBR_UUID=''; VBR_SERVER_NAME='www.huawei.com'; VBR_SHORT_ID=''; VBR_PRIVATE_KEY=''; VBR_PUBLIC_KEY=''; VBR_UP_MBPS=1000; VBR_DOWN_MBPS=1000
 ACME_DOMAIN=''; CF_KEY=''; CF_EMAIL=''; ACME_EMAIL=''
 BIN_DIR='/usr/local/bin'; CONFIG_DIR='/usr/local/etc/sing-box'; SERVICE_NAME='sing-box'; WORK_BASE='/tmp'; DOWNLOAD_URL=''; FORCE_DOWNLOAD=false; FORCE_BINARY_UPDATE=false; USER_ARTIFACT_DIR=''; USER_BACKUP_DIR=''; USER_ACME_HOME=''; USER_CERT_BASE_DIR=''
 VERBOSE_OUTPUT=false
@@ -1767,13 +2112,14 @@ prepare_release_binary() {
 }
 TARGET_BIN="$BIN_DIR/sing-box"; TARGET_BIN_NEW="$TARGET_BIN.new"; SERVICE_FILE="/etc/systemd/system/${SERVICE_NAME}.service"; TARGET_CONFIG="$CONFIG_DIR/config.json"
 INSTALLER_STATE_FILE="$CONFIG_DIR/installer-state.json"
-CREDENTIALS_DIR="$CONFIG_DIR/credentials"; VGR_ENV_FILE="$CREDENTIALS_DIR/vless-grpc-reality.env"; SHARED_SECRET_ENV_FILE="$CREDENTIALS_DIR/shared-secrets.env"; ACME_META_FILE="$CREDENTIALS_DIR/acme.env"
+CREDENTIALS_DIR="$CONFIG_DIR/credentials"; VGR_ENV_FILE="$CREDENTIALS_DIR/vless-grpc-reality.env"; VBR_ENV_FILE="$CREDENTIALS_DIR/vless-brutal-reality.env"; SHARED_SECRET_ENV_FILE="$CREDENTIALS_DIR/shared-secrets.env"; ACME_META_FILE="$CREDENTIALS_DIR/acme.env"
 CERT_BASE_DIR="${USER_CERT_BASE_DIR:-$CONFIG_DIR/certs}"; DEFAULT_TLS_CERT_DIR="$CERT_BASE_DIR/default"; HY2_CERT_DIR="$CERT_BASE_DIR/hysteria"
 HY2_KEY_FILE="$HY2_CERT_DIR/private.key"; HY2_CERT_PEM="$HY2_CERT_DIR/cert.pem"; HY2_CERT_CRT="$HY2_CERT_DIR/cert.crt"
 TROJAN_KEY_FILE="$DEFAULT_TLS_CERT_DIR/private.key"; TROJAN_CERT_FILE="$DEFAULT_TLS_CERT_DIR/cert.crt"; ANYTLS_KEY_FILE="$DEFAULT_TLS_CERT_DIR/private.key"; ANYTLS_CERT_FILE="$DEFAULT_TLS_CERT_DIR/cert.crt"
 ACME_HOME="${USER_ACME_HOME:-/root/.acme.sh}"; ACME_BIN="$ACME_HOME/acme.sh"
 mkdir -p "$BIN_DIR" "$CONFIG_DIR" "$CREDENTIALS_DIR" "$CERT_BASE_DIR" "$DEFAULT_TLS_CERT_DIR" "$HY2_CERT_DIR"
-CURRENT_PROTOCOLS=(); KEEP_PROTOCOLS=(); ADD_PROTOCOLS=(); EXISTING_NOT_SELECTED_PROTOCOLS=(); RESET_PROTOCOLS=(); TARGET_PROTOCOLS=(); PORT_PROMPT_PROTOCOLS=()
+CURRENT_PROTOCOLS=(); KEEP_PROTOCOLS=(); ADD_PROTOCOLS=(); EXISTING_NOT_SELECTED_PROTOCOLS=(); RESET_PROTOCOLS=(); DELETE_PROTOCOLS=(); TARGET_PROTOCOLS=(); PORT_PROMPT_PROTOCOLS=(); PARSED_PROTOCOLS=()
+PROTOCOL_ACTION_MODE=''; INTERACTIVE_PROTOCOL_ACTION_SELECTED=false
 BINARY_EXISTS=false; SERVICE_EXISTS=false; SERVICE_ACTIVE=false; CONFIG_EXISTS=false; SHOULD_UPDATE_BINARY=true
 [[ -x "$TARGET_BIN" ]] && BINARY_EXISTS=true
 service_exists && SERVICE_EXISTS=true || true
@@ -1799,6 +2145,7 @@ if [[ "$DEPLOY_MODE" == "merge" ]]; then
   MERGE_DETECTED_PROTOCOLS=("${CURRENT_PROTOCOLS[@]}")
 else
   apply_existing_protocol_ports
+  load_existing_protocol_runtime_values
 fi
 show_environment_status
 if [[ "$DEPLOY_MODE" == "standalone" && "$BINARY_EXISTS" == true && "$SERVICE_EXISTS" == true && "$SERVICE_ACTIVE" == true ]]; then
@@ -1810,15 +2157,23 @@ if [[ "$DEPLOY_MODE" == "standalone" && "$BINARY_EXISTS" == true && "$SERVICE_EX
     if prompt_yes_no_default_no '检测到已安装并运行 sing-box，是否覆盖更新二进制？ [y/N]: '; then SHOULD_UPDATE_BINARY=true; fi
   fi
 fi
-if interactive_mode && ! protocol_flags_provided; then collect_interactive_protocol_selection; fi
+if interactive_mode && ! protocol_flags_provided; then
+  if [[ "$DEPLOY_MODE" == "standalone" && ${#CURRENT_PROTOCOLS[@]} -gt 0 ]]; then
+    collect_interactive_existing_protocol_action
+  else
+    collect_interactive_protocol_selection
+  fi
+fi
 if [[ "$DEPLOY_MODE" == "merge" ]]; then
   CURRENT_PROTOCOLS=()
   unset CURRENT_PROTOCOL_PORTS
   declare -gA CURRENT_PROTOCOL_PORTS=()
 fi
-apply_incremental_protocol_plan
-show_incremental_plan
-collect_reset_protocols_if_needed
+if [[ "$INTERACTIVE_PROTOCOL_ACTION_SELECTED" != true ]]; then
+  apply_incremental_protocol_plan
+  show_incremental_plan
+  collect_reset_protocols_if_needed
+fi
 collect_reset_certificates_if_needed
 collect_protocol_specific_inputs
 validate_unique_enabled_ports
@@ -1827,7 +2182,7 @@ if [[ "$DEPLOY_MODE" == "merge" ]]; then
 fi
 reset_protocol_credentials_if_needed
 if [[ "$DEPLOY_MODE" == "standalone" ]]; then
-  backup_target "$TARGET_CONFIG" config; backup_target "$SERVICE_FILE" service; backup_target "$INSTALLER_STATE_FILE" installer-state; backup_target "$VGR_ENV_FILE" vgr-env; backup_target "$SHARED_SECRET_ENV_FILE" shared-secret-env; backup_target "$ACME_META_FILE" acme-meta; backup_target "$HY2_KEY_FILE" hy2-key; backup_target "$HY2_CERT_PEM" hy2-cert-pem; backup_target "$HY2_CERT_CRT" hy2-cert-crt; backup_target "$DEFAULT_TLS_CERT_DIR" default-cert-dir; backup_target "$HY2_CERT_DIR" hysteria-cert-dir; backup_target "$ACME_HOME" acme-home
+  backup_target "$TARGET_CONFIG" config; backup_target "$SERVICE_FILE" service; backup_target "$INSTALLER_STATE_FILE" installer-state; backup_target "$VGR_ENV_FILE" vgr-env; backup_target "$VBR_ENV_FILE" vbr-env; backup_target "$SHARED_SECRET_ENV_FILE" shared-secret-env; backup_target "$ACME_META_FILE" acme-meta; backup_target "$HY2_KEY_FILE" hy2-key; backup_target "$HY2_CERT_PEM" hy2-cert-pem; backup_target "$HY2_CERT_CRT" hy2-cert-crt; backup_target "$DEFAULT_TLS_CERT_DIR" default-cert-dir; backup_target "$HY2_CERT_DIR" hysteria-cert-dir; backup_target "$ACME_HOME" acme-home
   if [[ "$SHOULD_UPDATE_BINARY" == true ]]; then backup_target "$TARGET_BIN" binary; else touch "$BACKUP_DIR/binary.absent"; fi
   ROLLBACK_ACTIVE=true
 else
@@ -1850,8 +2205,8 @@ fi
 if [[ "$ENABLE_HY2" == true ]]; then
   generate_hy2_cert_if_needed
 fi
-if [[ "$ENABLE_VGR" == true || "$ENABLE_VBR" == true || "$ENABLE_TROJAN" == true || "$ENABLE_ANYTLS" == true ]]; then load_or_generate_vgr_credentials; fi
-if [[ "$ENABLE_TROJAN" == true || "$ENABLE_ANYTLS" == true ]]; then load_or_generate_shared_secrets; fi
+if [[ "$ENABLE_VGR" == true || "$ENABLE_VBR" == true ]]; then prepare_reality_credentials; fi
+if [[ "$ENABLE_TROJAN" == true || "$ENABLE_ANYTLS" == true ]]; then prepare_trojan_anytls_passwords; fi
 purge_existing_acme_materials_if_needed
 if acme_reissue_required; then
   if {
@@ -1896,7 +2251,7 @@ if [[ "$ENABLE_SS" == true ]]; then GEN_ARGS+=(--enable-shadowsocks --port "$POR
 if [[ "$ENABLE_TROJAN" == true ]]; then GEN_ARGS+=(--enable-trojan --trojan-port "$TROJAN_PORT" --trojan-password "$TROJAN_PASSWORD" --trojan-server-name "${ACME_DOMAIN:-$HOST}" --trojan-cert-path "$TROJAN_CERT_FILE" --trojan-key-path "$TROJAN_KEY_FILE"); else GEN_ARGS+=(--disable-trojan); fi
 if [[ "$ENABLE_ANYTLS" == true ]]; then GEN_ARGS+=(--enable-anytls --anytls-port "$ANYTLS_PORT" --anytls-password "$ANYTLS_PASSWORD" --anytls-server-name "${ACME_DOMAIN:-$HOST}" --anytls-cert-path "$ANYTLS_CERT_FILE" --anytls-key-path "$ANYTLS_KEY_FILE"); else GEN_ARGS+=(--disable-anytls); fi
 if [[ "$ENABLE_VGR" == true ]]; then GEN_ARGS+=(--enable-vless-grpc-reality --vless-grpc-reality-port "$VGR_PORT" --vless-grpc-reality-server-name "$VGR_SERVER_NAME" --vless-grpc-reality-service-name "$VGR_SERVICE_NAME" --vless-grpc-reality-private-key "$VGR_PRIVATE_KEY" --vless-grpc-reality-public-key "$VGR_PUBLIC_KEY" --vless-grpc-reality-short-id "$VGR_SHORT_ID" --vless-grpc-reality-uuid "$VGR_UUID"); else GEN_ARGS+=(--disable-vless-grpc-reality); fi
-if [[ "$ENABLE_VBR" == true ]]; then GEN_ARGS+=(--enable-vless-brutal-reality --vless-brutal-reality-port "$VBR_PORT" --vless-brutal-reality-server-name "$VBR_SERVER_NAME" --vless-brutal-reality-private-key "$VGR_PRIVATE_KEY" --vless-brutal-reality-public-key "$VGR_PUBLIC_KEY" --vless-brutal-reality-short-id "$VBR_SHORT_ID" --vless-brutal-reality-uuid "$VBR_UUID" --vless-brutal-reality-up-mbps "$VBR_UP_MBPS" --vless-brutal-reality-down-mbps "$VBR_DOWN_MBPS"); else GEN_ARGS+=(--disable-vless-brutal-reality); fi
+if [[ "$ENABLE_VBR" == true ]]; then GEN_ARGS+=(--enable-vless-brutal-reality --vless-brutal-reality-port "$VBR_PORT" --vless-brutal-reality-server-name "$VBR_SERVER_NAME" --vless-brutal-reality-private-key "$VBR_PRIVATE_KEY" --vless-brutal-reality-public-key "$VBR_PUBLIC_KEY" --vless-brutal-reality-short-id "$VBR_SHORT_ID" --vless-brutal-reality-uuid "$VBR_UUID" --vless-brutal-reality-up-mbps "$VBR_UP_MBPS" --vless-brutal-reality-down-mbps "$VBR_DOWN_MBPS"); else GEN_ARGS+=(--disable-vless-brutal-reality); fi
 
 log 'Generating deployment bundle via generate-sing-box-config.sh'
 "$GEN_SCRIPT" "${GEN_ARGS[@]}"
