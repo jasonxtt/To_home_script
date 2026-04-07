@@ -2129,6 +2129,16 @@ if not isinstance(target, dict) or not isinstance(target.get('inbounds'), list):
 if not isinstance(generated, dict) or not isinstance(generated.get('inbounds'), list):
     raise SystemExit('generated config has no top-level inbounds array')
 
+generated_tags = {
+    ib.get('tag')
+    for ib in generated['inbounds']
+    if isinstance(ib, dict) and isinstance(ib.get('tag'), str) and ib.get('tag')
+}
+if generated_tags:
+    target['inbounds'] = [
+        ib for ib in target['inbounds']
+        if not (isinstance(ib, dict) and ib.get('tag') in generated_tags)
+    ]
 target['inbounds'].extend(generated['inbounds'])
 tmp = target_path + '.tmp'
 with open(tmp, 'w', encoding='utf-8') as f:
