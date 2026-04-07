@@ -1092,8 +1092,81 @@ load_existing_state() {
   parsed="$(python3 - "$source" <<'PY2'
 import json, sys
 path = sys.argv[1]
+
+def load_json_relaxed(path):
+    text = open(path, encoding='utf-8').read()
+    out = []
+    in_string = False
+    escape = False
+    line_comment = False
+    block_comment = False
+    i = 0
+    while i < len(text):
+        ch = text[i]
+        nxt = text[i + 1] if i + 1 < len(text) else ''
+        if line_comment:
+            if ch == '\n':
+                line_comment = False
+                out.append(ch)
+        elif block_comment:
+            if ch == '*' and nxt == '/':
+                block_comment = False
+                i += 1
+        elif in_string:
+            out.append(ch)
+            if escape:
+                escape = False
+            elif ch == '\\':
+                escape = True
+            elif ch == '"':
+                in_string = False
+        else:
+            if ch == '/' and nxt == '/':
+                line_comment = True
+                i += 1
+            elif ch == '/' and nxt == '*':
+                block_comment = True
+                i += 1
+            else:
+                out.append(ch)
+                if ch == '"':
+                    in_string = True
+        i += 1
+    cleaned = ''.join(out)
+    out = []
+    in_string = False
+    escape = False
+    i = 0
+    while i < len(cleaned):
+        ch = cleaned[i]
+        if in_string:
+            out.append(ch)
+            if escape:
+                escape = False
+            elif ch == '\\':
+                escape = True
+            elif ch == '"':
+                in_string = False
+            i += 1
+            continue
+        if ch == '"':
+            in_string = True
+            out.append(ch)
+            i += 1
+            continue
+        if ch == ',':
+            j = i + 1
+            while j < len(cleaned) and cleaned[j] in ' \t\r\n':
+                j += 1
+            if j < len(cleaned) and cleaned[j] in '}]':
+                i += 1
+                continue
+        out.append(ch)
+        i += 1
+    return json.loads(''.join(out))
+
 try:
-    data = json.load(open(path, encoding='utf-8'))
+    data = load_json_relaxed(path)
 except Exception:
     raise SystemExit(0)
 protocols=[]
@@ -1395,8 +1468,81 @@ json_has_top_level_inbounds_array() {
 import json
 import sys
 path = sys.argv[1]
+
+def load_json_relaxed(path):
+    text = open(path, encoding="utf-8").read()
+    out = []
+    in_string = False
+    escape = False
+    line_comment = False
+    block_comment = False
+    i = 0
+    while i < len(text):
+        ch = text[i]
+        nxt = text[i + 1] if i + 1 < len(text) else ""
+        if line_comment:
+            if ch == "\n":
+                line_comment = False
+                out.append(ch)
+        elif block_comment:
+            if ch == "*" and nxt == "/":
+                block_comment = False
+                i += 1
+        elif in_string:
+            out.append(ch)
+            if escape:
+                escape = False
+            elif ch == "\\":
+                escape = True
+            elif ch == '"':
+                in_string = False
+        else:
+            if ch == "/" and nxt == "/":
+                line_comment = True
+                i += 1
+            elif ch == "/" and nxt == "*":
+                block_comment = True
+                i += 1
+            else:
+                out.append(ch)
+                if ch == '"':
+                    in_string = True
+        i += 1
+    cleaned = "".join(out)
+    out = []
+    in_string = False
+    escape = False
+    i = 0
+    while i < len(cleaned):
+        ch = cleaned[i]
+        if in_string:
+            out.append(ch)
+            if escape:
+                escape = False
+            elif ch == "\\":
+                escape = True
+            elif ch == '"':
+                in_string = False
+            i += 1
+            continue
+        if ch == '"':
+            in_string = True
+            out.append(ch)
+            i += 1
+            continue
+        if ch == ",":
+            j = i + 1
+            while j < len(cleaned) and cleaned[j] in " \t\r\n":
+                j += 1
+            if j < len(cleaned) and cleaned[j] in "}]":
+                i += 1
+                continue
+        out.append(ch)
+        i += 1
+    return json.loads("".join(out))
+
 try:
-    data = json.load(open(path, encoding="utf-8"))
+    data = load_json_relaxed(path)
 except Exception:
     raise SystemExit(1)
 if isinstance(data, dict) and isinstance(data.get("inbounds"), list):
@@ -1412,6 +1558,79 @@ import json
 import os
 import sys
 root = sys.argv[1]
+
+def load_json_relaxed(path):
+    text = open(path, encoding="utf-8").read()
+    out = []
+    in_string = False
+    escape = False
+    line_comment = False
+    block_comment = False
+    i = 0
+    while i < len(text):
+        ch = text[i]
+        nxt = text[i + 1] if i + 1 < len(text) else ""
+        if line_comment:
+            if ch == "\n":
+                line_comment = False
+                out.append(ch)
+        elif block_comment:
+            if ch == "*" and nxt == "/":
+                block_comment = False
+                i += 1
+        elif in_string:
+            out.append(ch)
+            if escape:
+                escape = False
+            elif ch == "\\":
+                escape = True
+            elif ch == '"':
+                in_string = False
+        else:
+            if ch == "/" and nxt == "/":
+                line_comment = True
+                i += 1
+            elif ch == "/" and nxt == "*":
+                block_comment = True
+                i += 1
+            else:
+                out.append(ch)
+                if ch == '"':
+                    in_string = True
+        i += 1
+    cleaned = "".join(out)
+    out = []
+    in_string = False
+    escape = False
+    i = 0
+    while i < len(cleaned):
+        ch = cleaned[i]
+        if in_string:
+            out.append(ch)
+            if escape:
+                escape = False
+            elif ch == "\\":
+                escape = True
+            elif ch == '"':
+                in_string = False
+            i += 1
+            continue
+        if ch == '"':
+            in_string = True
+            out.append(ch)
+            i += 1
+            continue
+        if ch == ",":
+            j = i + 1
+            while j < len(cleaned) and cleaned[j] in " \t\r\n":
+                j += 1
+            if j < len(cleaned) and cleaned[j] in "}]":
+                i += 1
+                continue
+        out.append(ch)
+        i += 1
+    return json.loads("".join(out))
+
 paths = []
 for base, _dirs, files in os.walk(root):
     for name in files:
@@ -1419,7 +1638,7 @@ for base, _dirs, files in os.walk(root):
             paths.append(os.path.join(base, name))
 for path in sorted(paths):
     try:
-        data = json.load(open(path, encoding="utf-8"))
+        data = load_json_relaxed(path)
     except Exception:
         continue
     if isinstance(data, dict) and isinstance(data.get("inbounds"), list):
@@ -1660,6 +1879,78 @@ mode = sys.argv[1]
 target_config = sys.argv[2]
 target_dir = sys.argv[3]
 
+def load_json_relaxed(path):
+    text = open(path, encoding='utf-8').read()
+    out = []
+    in_string = False
+    escape = False
+    line_comment = False
+    block_comment = False
+    i = 0
+    while i < len(text):
+        ch = text[i]
+        nxt = text[i + 1] if i + 1 < len(text) else ''
+        if line_comment:
+            if ch == '\n':
+                line_comment = False
+                out.append(ch)
+        elif block_comment:
+            if ch == '*' and nxt == '/':
+                block_comment = False
+                i += 1
+        elif in_string:
+            out.append(ch)
+            if escape:
+                escape = False
+            elif ch == '\\':
+                escape = True
+            elif ch == '"':
+                in_string = False
+        else:
+            if ch == '/' and nxt == '/':
+                line_comment = True
+                i += 1
+            elif ch == '/' and nxt == '*':
+                block_comment = True
+                i += 1
+            else:
+                out.append(ch)
+                if ch == '"':
+                    in_string = True
+        i += 1
+    cleaned = ''.join(out)
+    out = []
+    in_string = False
+    escape = False
+    i = 0
+    while i < len(cleaned):
+        ch = cleaned[i]
+        if in_string:
+            out.append(ch)
+            if escape:
+                escape = False
+            elif ch == '\\':
+                escape = True
+            elif ch == '"':
+                in_string = False
+            i += 1
+            continue
+        if ch == '"':
+            in_string = True
+            out.append(ch)
+            i += 1
+            continue
+        if ch == ',':
+            j = i + 1
+            while j < len(cleaned) and cleaned[j] in ' \t\r\n':
+                j += 1
+            if j < len(cleaned) and cleaned[j] in '}]':
+                i += 1
+                continue
+        out.append(ch)
+        i += 1
+    return json.loads(''.join(out))
+
 paths = []
 if mode == 'C':
     for base, _dirs, files in os.walk(target_dir):
@@ -1672,7 +1963,7 @@ else:
 
 for path in paths:
     try:
-        data = json.load(open(path, encoding='utf-8'))
+        data = load_json_relaxed(path)
     except Exception:
         continue
     if not isinstance(data, dict):
@@ -1757,8 +2048,79 @@ import sys
 target_path = sys.argv[1]
 generated_path = sys.argv[2]
 
-with open(target_path, encoding='utf-8') as f:
-    target = json.load(f)
+def load_json_relaxed(path):
+    text = open(path, encoding='utf-8').read()
+    out = []
+    in_string = False
+    escape = False
+    line_comment = False
+    block_comment = False
+    i = 0
+    while i < len(text):
+        ch = text[i]
+        nxt = text[i + 1] if i + 1 < len(text) else ''
+        if line_comment:
+            if ch == '\n':
+                line_comment = False
+                out.append(ch)
+        elif block_comment:
+            if ch == '*' and nxt == '/':
+                block_comment = False
+                i += 1
+        elif in_string:
+            out.append(ch)
+            if escape:
+                escape = False
+            elif ch == '\\':
+                escape = True
+            elif ch == '"':
+                in_string = False
+        else:
+            if ch == '/' and nxt == '/':
+                line_comment = True
+                i += 1
+            elif ch == '/' and nxt == '*':
+                block_comment = True
+                i += 1
+            else:
+                out.append(ch)
+                if ch == '"':
+                    in_string = True
+        i += 1
+    cleaned = ''.join(out)
+    out = []
+    in_string = False
+    escape = False
+    i = 0
+    while i < len(cleaned):
+        ch = cleaned[i]
+        if in_string:
+            out.append(ch)
+            if escape:
+                escape = False
+            elif ch == '\\':
+                escape = True
+            elif ch == '"':
+                in_string = False
+            i += 1
+            continue
+        if ch == '"':
+            in_string = True
+            out.append(ch)
+            i += 1
+            continue
+        if ch == ',':
+            j = i + 1
+            while j < len(cleaned) and cleaned[j] in ' \t\r\n':
+                j += 1
+            if j < len(cleaned) and cleaned[j] in '}]':
+                i += 1
+                continue
+        out.append(ch)
+        i += 1
+    return json.loads(''.join(out))
+
+target = load_json_relaxed(target_path)
 with open(generated_path, encoding='utf-8') as f:
     generated = json.load(f)
 
